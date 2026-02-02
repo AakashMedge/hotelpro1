@@ -32,33 +32,61 @@ export async function GET(
     request: NextRequest
 ): Promise<NextResponse<TablesListResponse>> {
     try {
-        // Optional: filter by tableCode query param
         const { searchParams } = new URL(request.url);
         const tableCode = searchParams.get("code");
 
-        const where = tableCode
-            ? { tableCode }
-            : {};
+        let where: any = { deletedAt: null };
+        if (tableCode) {
+            // Smart Matching: Handle "4", "04", and "T-04"
+            const paddedCode = tableCode.padStart(2, '0');
+            where = {
+                deletedAt: null,
+                OR: [
+                    { tableCode: { equals: tableCode, mode: 'insensitive' } },
+                    { tableCode: { equals: `T-${tableCode}`, mode: 'insensitive' } },
+                    { tableCode: { equals: `T-${paddedCode}`, mode: 'insensitive' } },
+                    { tableCode: { equals: paddedCode, mode: 'insensitive' } }
+                ]
+            };
+        }
 
         const tables = await prisma.table.findMany({
             where,
+            include: {
+                orders: {
+                    where: {
+                        status: {
+                            notIn: ["CLOSED"]
+                        }
+                    },
+                    select: {
+                        id: true,
+                        customerName: true,
+                        sessionId: true,
+                        status: true,
+                    },
+                    take: 1,
+                    orderBy: { createdAt: 'desc' }
+                }
+            },
             orderBy: {
                 tableCode: "asc",
             },
         });
 
-        // Map and ensure capacity exists (fallback for sync issues)
+        // Map and ensure capacity exists
         const formattedTables = tables.map(t => ({
             id: t.id,
             tableCode: t.tableCode,
             capacity: (t as any).capacity ?? 4,
             status: t.status,
-            assignedWaiterId: t.assignedWaiterId, // Added this
+            activeOrder: t.orders[0] || null,
+            assignedWaiterId: t.assignedWaiterId,
         }));
 
         return NextResponse.json({
             success: true,
-            tables: formattedTables,
+            tables: formattedTables as any,
         });
     } catch (error) {
         console.error("[TABLES API] Error fetching tables:", error);

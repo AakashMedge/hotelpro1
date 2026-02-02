@@ -74,6 +74,7 @@ model Order {
   closedAt  DateTime?
   auditLogs AuditLog[]
   customerName String?
+  sessionId    String?
   table     Table       @relation(fields: [tableId], references: [id])
   items     OrderItem[]
   payment   Payment?

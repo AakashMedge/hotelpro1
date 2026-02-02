@@ -1,195 +1,512 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import Link from 'next/link';
-import Image from 'next/image';
-import { useRouter } from 'next/navigation';
 
-const menuItems = [
-    {
-        id: 1,
-        title: 'Wagyu Beef Tenderloin',
-        price: '₹6,800',
-        image: '/images/menu/wagyu.png',
-        description: 'Gold-grade Wagyu with truffle marrow.'
-    },
-    {
-        id: 2,
-        title: 'Black Truffle Risotto',
-        price: '₹4,900',
-        image: '/images/menu/risotto.png',
-        description: 'Aged parmesan and fresh truffle.'
-    },
-    {
-        id: 6,
-        title: 'Luxury Tandoori Lobster',
-        price: '₹7,500',
-        image: '/images/menu/lobster.png',
-        description: 'Fresh lobster tails with gold leaf.'
-    },
-];
+import MobileNav from '@/components/public/MobileNav';
+import { motion, AnimatePresence } from 'framer-motion';
 
-export default function AIAssistant() {
-    const [messages, setMessages] = useState([
-        { role: 'assistant', text: "Greetings. I am the HotelPro Culinary Intelligence. I've analyzed your stay—shall we explore our Signature selections this evening?" }
-    ]);
-    const [isTyping, setIsTyping] = useState(false);
-    const [basket, setBasket] = useState<number[]>([]);
-    const chatEndRef = useRef<HTMLDivElement>(null);
-    const router = useRouter();
+export default function AIAssistantPage() {
+    const [isListening, setIsListening] = useState(false);
+    const [guestName, setGuestName] = useState('');
+    const [tableCode, setTableCode] = useState('');
+    const [lastResponse, setLastResponse] = useState('');
+    const currentAudioRef = useRef<HTMLAudioElement | null>(null); // For interruption handling
 
-    const scrollToBottom = () => {
-        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+
+    // AI State Machine
+    const [aiState, setAiState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+    const [visualContext, setVisualContext] = useState<any>(null); // For Product Cards / Status
+
+    // UI Trigger Parser
+    const parseUITriggers = (content: string) => {
+        const itemMatch = content.match(/\[UI:ITEM_CARD:(.*?)\]/);
+        if (itemMatch) {
+            setVisualContext({ type: 'ITEM_CARD', id: itemMatch[1] });
+        }
+
+        const statusMatch = content.match(/\[UI:STATUS_TRACKER\]/);
+        if (statusMatch) {
+            setVisualContext({ type: 'STATUS_TRACKER' });
+        }
+
+        const summaryMatch = content.match(/\[UI:ORDER_SUMMARY\]/);
+        if (summaryMatch) {
+            setVisualContext({ type: 'ORDER_SUMMARY' });
+        }
+    };
+
+    // Simplified Interaction Logic (No SDK)
+    const [messages, setMessages] = useState<any[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const handleSendMessage = async (text: string) => {
+        if (!text.trim()) return;
+
+        // INTERRUPTION LOGIC: If AI is speaking, shut him up immediately.
+        if (currentAudioRef.current) {
+            currentAudioRef.current.pause();
+            currentAudioRef.current = null;
+        }
+        window.speechSynthesis.cancel(); // Also kill browser TTS if active
+
+        const newMsg = { id: Date.now(), role: 'user', content: text };
+        setMessages(prev => [...prev, newMsg]);
+        setAiState('thinking');
+        setIsLoading(true);
+
+        try {
+            const res = await fetch('/api/ai/concierge', {
+                method: 'POST',
+                body: JSON.stringify({
+                    messages: [...messages, newMsg],
+                    guestName,
+                    tableCode
+                })
+            });
+
+            const reply = await res.text();
+
+            const aiMsg = { id: Date.now() + 1, role: 'assistant', content: reply };
+            setMessages(prev => [...prev, aiMsg]);
+
+            setAiState('speaking');
+            parseUITriggers(reply);
+            speakText(reply);
+
+        } catch (e) {
+            console.error(e);
+            setAiState('idle');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     useEffect(() => {
-        scrollToBottom();
-    }, [messages]);
+        if (typeof window !== 'undefined') {
+            setGuestName(localStorage.getItem('hp_guest_name') || '');
+            setTableCode(localStorage.getItem('hp_table_no') || '');
+        }
+    }, []);
 
-    const toggleBasket = (id: number) => {
-        setBasket(prev =>
-            prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
-        );
+    // Layer 4: Senses (Speech Recognition)
+    const recognitionRef = useRef<any>(null);
+
+    const startListening = () => {
+        if (!('webkitSpeechRecognition' in window) && !('speechRecognition' in window)) {
+            alert('Voice recognition is not supported in this browser.');
+            return;
+        }
+
+        const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).speechRecognition;
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = false;
+        recognitionRef.current.interimResults = false;
+        recognitionRef.current.lang = 'en-US';
+
+        recognitionRef.current.onstart = () => {
+            setIsListening(true);
+            setAiState('listening');
+        };
+
+        recognitionRef.current.onresult = (event: any) => {
+            const transcript = event.results[0][0].transcript;
+            handleSendMessage(transcript);
+        };
+
+        recognitionRef.current.onerror = () => {
+            setIsListening(false);
+            setAiState('idle');
+        };
+
+        recognitionRef.current.onend = () => {
+            setIsListening(false);
+        };
+
+        recognitionRef.current.start();
     };
 
-    const simulateResponse = (text: string) => {
-        setIsTyping(true);
-        setTimeout(() => {
-            setMessages(prev => [...prev, { role: 'assistant', text }]);
-            setIsTyping(false);
-        }, 1500);
+    // Layer 4: Senses (Text to Speech - Hybrid Engine)
+    const speakText = async (text: string) => {
+        if (!text) return;
+
+        // Clean text for speech (remove UI tags)
+        const cleanText = text.replace(/\[UI:.*?\]/g, '').replace(/\[ tool_call .*? \]/g, '').trim();
+        if (!cleanText) return;
+
+        console.log("Speaking:", cleanText.slice(0, 30) + "...");
+
+        try {
+            // 1. Try ElevenLabs API (The "Royal" Voice)
+            const response = await fetch('/api/ai/voice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: cleanText }),
+            });
+
+            if (response.ok) {
+                const audioBlob = await response.blob();
+                const audioUrl = URL.createObjectURL(audioBlob);
+                const audio = new Audio(audioUrl);
+                currentAudioRef.current = audio;
+
+                audio.onplay = () => {
+                    setAiState('speaking');
+                    // MAGIC: Start listening AGAIN immediately (Barge-In)
+                    // We add a small delay to let AEC (Echo and Noise Cancellation) settle
+                    setTimeout(() => startListening(), 500);
+                };
+
+                audio.onended = () => {
+                    // Only go to idle if we aren't already listening/interrupted
+                    setAiState(prev => prev === 'listening' ? 'listening' : 'idle');
+                };
+                audio.play();
+                return; // Success! Exit function.
+            }
+        } catch (err) {
+            console.warn("ElevenLabs failed, falling back to Browser TTS", err);
+        }
+
+        // 2. Fallback: Browser Native TTS (Reinforced)
+        if (!('speechSynthesis' in window)) return;
+
+        window.speechSynthesis.cancel();
+
+        const SynthesisUtterance = (window as any).SpeechSynthesisUtterance || (window as any).webkitSpeechSynthesisUtterance;
+        const utterance = new SynthesisUtterance(cleanText);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+
+        const voices = window.speechSynthesis.getVoices();
+        const butlerVoice = voices.find(v => v.name.includes('Google UK English Male')) ||
+            voices.find(v => v.name.includes('Daniel')) ||
+            voices.find(v => v.lang.startsWith('en-GB'));
+
+        if (butlerVoice) utterance.voice = butlerVoice;
+
+        utterance.onstart = () => setAiState('speaking');
+        utterance.onend = () => setAiState('idle');
+        utterance.onerror = () => setAiState('idle');
+
+        window.speechSynthesis.speak(utterance);
     };
+
+    // Chrome/Safari voice loading workaround
+    useEffect(() => {
+        const loadVoices = () => {
+            window.speechSynthesis.getVoices();
+        };
+
+        if ('speechSynthesis' in window) {
+            loadVoices();
+            if (window.speechSynthesis.onvoiceschanged !== undefined) {
+                window.speechSynthesis.onvoiceschanged = loadVoices;
+            }
+        }
+
+        const handleInteraction = () => {
+            console.log("Audio context primed via interaction");
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.resume();
+                const SynthesisUtterance = (window as any).SpeechSynthesisUtterance || (window as any).webkitSpeechSynthesisUtterance;
+                const v = new SynthesisUtterance("");
+                window.speechSynthesis.speak(v);
+            }
+            window.removeEventListener('click', handleInteraction);
+        };
+        window.addEventListener('click', handleInteraction);
+
+        return () => {
+            window.removeEventListener('click', handleInteraction);
+            // Cleanup: Stop all speech when leaving the page
+            if (typeof window !== 'undefined') {
+                window.speechSynthesis.cancel();
+                if (currentAudioRef.current) {
+                    currentAudioRef.current.pause();
+                    currentAudioRef.current = null;
+                }
+            }
+        };
+    }, []);
 
     return (
-        <main className="min-h-screen bg-[#0A0A0A] text-white font-sans relative flex flex-col overflow-hidden">
-
-            {/* Background Ambience */}
-            <div className="absolute inset-0 z-0">
-                <div className="absolute top-[-10%] left-[-10%] w-[60%] md:w-[40%] h-[40%] bg-[#D43425] rounded-full blur-[80px] md:blur-[120px] opacity-10 animate-pulse" />
-                <div className="absolute bottom-[-10%] right-[-10%] w-[60%] md:w-[40%] h-[40%] bg-[#D43425] rounded-full blur-[80px] md:blur-[120px] opacity-10 animate-pulse delay-1000" />
+        <main className="min-h-screen bg-[#FBF8F3] overflow-hidden flex flex-col items-center justify-between py-10 px-6 safe-area-bottom relative">
+            {/* Background Watermark (Crest) */}
+            <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] pointer-events-none overflow-hidden">
+                <svg width="600" height="600" viewBox="0 0 400 400" fill="none" className="rotate-12 scale-150">
+                    <path
+                        d="M200 10 C240 10 280 30 300 60 C340 40 390 70 390 120 C390 160 370 190 340 200 C370 210 390 240 390 280 C390 330 340 360 300 340 C280 370 240 390 200 390 C160 390 120 370 100 340 C60 360 10 330 10 280 C10 240 30 210 60 200 C30 190 10 160 10 120 C10 70 60 40 100 60 C120 30 160 10 200 10 Z"
+                        stroke="#D43425"
+                        strokeWidth="2"
+                    />
+                </svg>
             </div>
 
-            {/* Header - MOBILE FIX */}
-            <header className="relative z-50 p-6 md:p-12 flex justify-between items-center">
-                <Link href="/welcome-guest" className="w-10 h-10 md:w-12 md:h-12 border border-white/10 rounded-full flex items-center justify-center hover:bg-white hover:text-black transition-all">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="md:w-5 md:h-5"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
-                </Link>
-                <div className="text-center">
-                    <div className="text-[#D43425] font-black text-xl md:text-2xl tracking-tighter uppercase">HOTELPRO</div>
-                    <p className="text-[7px] md:text-[8px] uppercase font-bold tracking-[0.5em] opacity-40">Artificial Intelligence Unit</p>
-                </div>
-                <div className="w-10 h-10 md:w-12 md:h-12" /> {/* Spacer */}
-            </header>
-
-            {/* AI Pulse Orb - MOBILE FIX */}
-            <div className="relative z-10 flex flex-col items-center justify-center pt-4 md:pt-8 pb-8 md:pb-12">
-                <div className="relative w-24 h-24 md:w-48 md:h-48">
-                    <div className="absolute inset-0 bg-[#D43425] rounded-full blur-xl md:blur-2xl opacity-20 animate-pulse" />
-                    <div className="absolute inset-0 border-2 border-[#D43425] rounded-full animate-[ping_3s_infinite] opacity-30" />
-                    <div className="absolute inset-2 md:inset-4 border border-[#D43425]/40 rounded-full animate-[spin_12s_linear_infinite]" />
-                    <div className="absolute inset-6 md:inset-8 border-2 border-[#D43425] rounded-full flex items-center justify-center">
-                        <div className={`w-8 h-8 md:w-12 md:h-12 bg-white rounded-full flex items-center justify-center transition-all duration-500 ${isTyping ? 'scale-110 bg-[#D43425]' : 'scale-100'}`}>
-                            <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-black rounded-full animate-bounce" />
-                        </div>
-                    </div>
-                </div>
+            {/* Header Branding */}
+            <div className="relative z-10 text-center space-y-1 mt-2">
+                <h2 className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-[#D43425]/40 italic">HotelPro Premium Suite</h2>
+                <h1 className="text-xl sm:text-2xl font-playfair font-black text-[#1A1A1A] italic">The Master Waiter</h1>
             </div>
 
-            {/* Chat Space - MOBILE FIX */}
-            <section className="relative z-10 grow flex flex-col px-6 md:px-24 lg:px-64 overflow-y-auto no-scrollbar pb-32 md:pb-40">
-                <div className="space-y-6 md:space-y-8">
-                    {messages.map((msg, idx) => (
-                        <div key={idx} className={`flex ${msg.role === 'assistant' ? 'justify-start' : 'justify-end animate-in slide-in-from-right-4'}`}>
-                            <div className={`max-w-[90%] md:max-w-[80%] p-5 md:p-6 rounded-[1.8rem] md:rounded-[2rem] ${msg.role === 'assistant' ? 'bg-white/5 border border-white/10 text-lg md:text-2xl font-playfair italic leading-relaxed' : 'bg-[#D43425] text-white font-bold text-sm md:text-base'}`}>
-                                {msg.text}
-                            </div>
-                        </div>
-                    ))}
-
-                    {isTyping && (
-                        <div className="flex justify-start">
-                            <div className="bg-white/5 border border-white/10 p-3 md:p-4 rounded-full flex gap-1.5 md:gap-2">
-                                <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-[#D43425] rounded-full animate-bounce" />
-                                <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-[#D43425] rounded-full animate-bounce delay-100" />
-                                <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-[#D43425] rounded-full animate-bounce delay-200" />
-                            </div>
-                        </div>
+            {/* LAYER 5: THE FACE (Generative Aura Avatar) */}
+            <div className="relative z-10 flex items-center justify-center w-full max-w-[280px] sm:max-w-sm aspect-square my-4 sm:my-0">
+                {/* Outer Glows */}
+                <AnimatePresence>
+                    {aiState !== 'idle' && (
+                        <motion.div
+                            initial={{ scale: 0.8, opacity: 0 }}
+                            animate={{
+                                opacity: [0.1, 0.25, 0.1],
+                                scale: [1, 1.2, 1],
+                            }}
+                            exit={{ scale: 0.8, opacity: 0 }}
+                            transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
+                            className={`absolute w-64 h-64 rounded-full blur-[80px] transition-colors duration-1000 ${aiState === 'listening' ? 'bg-[#D43425]' :
+                                aiState === 'thinking' ? 'bg-[#3D2329]' :
+                                    'bg-[#C9A227]'
+                                }`}
+                        />
                     )}
+                </AnimatePresence>
 
-                    {/* AI Recommendations - MOBILE FIX */}
-                    {!isTyping && messages.length > 0 && (
-                        <div className="pt-6 md:pt-8 space-y-4 animate-in fade-in slide-in-from-bottom-8 duration-1000">
-                            <p className="text-[9px] md:text-[10px] font-black uppercase tracking-[0.4em] text-[#D43425]">Recommended for You</p>
-                            <div className="flex gap-5 md:gap-6 overflow-x-auto no-scrollbar pb-6 -mx-6 px-6">
-                                {menuItems.map((item) => (
-                                    <div key={item.id} className="min-w-[240px] md:min-w-[280px] bg-white/5 border border-white/10 rounded-[2rem] md:rounded-[2.5rem] p-3 md:p-4 flex flex-col gap-3 md:gap-4 group">
-                                        <div className="relative aspect-square rounded-[1.5rem] md:rounded-[1.8rem] overflow-hidden">
-                                            <Image src={item.image} alt={item.title} fill className="object-cover transition-transform group-hover:scale-110" />
-                                            <div className="absolute inset-0 bg-black/20" />
-                                        </div>
-                                        <div className="px-1 md:px-2">
-                                            <div className="flex justify-between items-center mb-1">
-                                                <h4 className="font-playfair font-black text-base md:text-lg">{item.title}</h4>
-                                                <span className="text-[#D43425] font-bold text-sm md:text-base">{item.price}</span>
-                                            </div>
-                                            <p className="text-[9px] md:text-[10px] uppercase font-bold tracking-widest opacity-40 mb-3 md:mb-4 line-clamp-1">{item.description}</p>
-                                            <button
-                                                onClick={() => toggleBasket(item.id)}
-                                                className={`w-full py-2.5 md:py-3 rounded-full font-black text-[9px] md:text-[10px] uppercase tracking-widest transition-all ${basket.includes(item.id) ? 'bg-[#D43425] text-white' : 'bg-white text-black hover:bg-[#D43425] hover:text-white'}`}
-                                            >
-                                                {basket.includes(item.id) ? 'In Tray ✓' : 'Add to Tray'}
-                                            </button>
-                                        </div>
-                                    </div>
+                {/* Main Avatar Container */}
+                <motion.div
+                    onClick={startListening}
+                    animate={{
+                        scale: aiState === 'listening' ? [1, 1.05, 1] : 1,
+                    }}
+                    transition={{
+                        repeat: aiState === 'listening' ? Infinity : 0,
+                        duration: 2,
+                        ease: "easeInOut"
+                    }}
+                    className="relative w-56 h-56 sm:w-72 sm:h-72 flex items-center justify-center cursor-pointer group"
+                >
+                    {/* The Waiter Image */}
+                    <div className="relative z-10 w-full h-full flex items-center justify-center">
+                        <motion.img
+                            src="/images/waiter.png"
+                            alt="Master Waiter"
+                            animate={{
+                                scale: aiState === 'idle' ? [1, 1.03, 1] : 1,
+                                y: aiState === 'idle' ? [0, -4, 0] : 0
+                            }}
+                            transition={{
+                                repeat: Infinity,
+                                duration: 4,
+                                ease: "easeInOut"
+                            }}
+                            className={`w-full h-full object-contain transition-all duration-1000 ${aiState === 'thinking' ? 'grayscale brightness-75 blur-[1px]' : 'grayscale-0'
+                                }`}
+                        />
+
+                        {/* Status Overlay (Subtle Loading Spinner) */}
+                        {aiState === 'thinking' && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                                <motion.div
+                                    animate={{ rotate: 360 }}
+                                    transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                                    className="w-16 h-16 border-2 border-[#C9A227]/20 border-t-[#C9A227] rounded-full"
+                                />
+                            </div>
+                        )}
+
+                        {/* Audio Waveform (Only when listening) */}
+                        {aiState === 'listening' && (
+                            <div className="absolute -bottom-4 flex items-center gap-1">
+                                {[1, 2, 3, 4, 5].map(i => (
+                                    <motion.div
+                                        key={i}
+                                        animate={{ height: [4, 16, 4] }}
+                                        transition={{ repeat: Infinity, duration: 0.5, delay: i * 0.1 }}
+                                        className="w-1 bg-[#D43425] rounded-full opacity-60"
+                                    />
                                 ))}
                             </div>
-                        </div>
-                    )}
-                    <div ref={chatEndRef} />
-                </div>
-            </section>
+                        )}
+                    </div>
 
-            {/* Input Bar - MOBILE FIX */}
-            <div className="fixed bottom-0 left-0 w-full p-4 md:p-12 z-100 bg-gradient-to-t from-black via-black/90 to-transparent">
-                <div className="max-w-4xl mx-auto relative px-2">
-                    <input
-                        type="text"
-                        placeholder="Ask your AI Assistant..."
-                        className="w-full bg-white/10 border border-white/10 rounded-full px-6 md:px-8 py-4 md:py-5 text-base md:text-lg font-playfair italic outline-none focus:border-[#D43425] focus:bg-white/15 transition-all text-white pr-16 md:pr-20"
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                const text = e.currentTarget.value;
-                                if (!text) return;
-                                setMessages(prev => [...prev, { role: 'user', text }]);
-                                e.currentTarget.value = '';
-                                simulateResponse("Exquisite choice. I am notifying the cellar to prepare the pairing for your selection.");
-                            }
-                        }}
-                    />
-                    <button className="absolute right-4 md:right-3 top-1/2 -translate-y-1/2 w-10 h-10 md:w-12 md:h-12 bg-[#D43425] rounded-full flex items-center justify-center shadow-lg hover:scale-110 active:scale-95 transition-transform">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" className="md:w-5 md:h-5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                    </button>
+                    {/* Interaction Indicator (Floating Mic) */}
+                    {aiState === 'idle' && (
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.5 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            whileHover={{ scale: 1.1 }}
+                            className="absolute bottom-4 right-4 bg-white rounded-full p-3 shadow-xl border border-[#D43425]/10 z-20"
+                        >
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D43425" strokeWidth="2.5">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                            </svg>
+                        </motion.div>
+                    )}
+                </motion.div>
+
+                {/* Tap Label */}
+                {aiState === 'idle' && (
+                    <motion.p
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="absolute -bottom-8 text-[8px] font-black uppercase tracking-[0.4em] text-[#D43425]/60 animate-pulse"
+                    >
+                        Tap to Speak
+                    </motion.p>
+                )}
+            </div>
+
+            {/* VISUAL UI LAYER (Product Cards & Status) */}
+            <AnimatePresence>
+                {visualContext && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                        className="fixed bottom-32 z-50 w-full max-w-sm px-4 pointer-events-none"
+                    >
+                        <div className="bg-white/90 backdrop-blur-xl rounded-2xl p-4 shadow-2xl border border-[#D43425]/10 pointer-events-auto">
+                            {visualContext.type === 'ITEM_CARD' && (
+                                <div className="flex gap-4 items-center">
+                                    <div className="w-16 h-16 bg-[#FBF8F3] rounded-lg flex items-center justify-center border border-[#D43425]/10">
+                                        <span className="text-2xl">🍽️</span>
+                                    </div>
+                                    <div className="flex-1">
+                                        <h3 className="text-sm font-playfair font-bold text-[#1A1A1A]">Chef's Recommendation</h3>
+                                        <p className="text-xs text-ink/60">An excellent choice for your palate.</p>
+                                    </div>
+                                    <button
+                                        onClick={() => handleSendMessage(`Yes, please order the item ${visualContext.id}`)}
+                                        className="bg-[#D43425] text-white px-3 py-2 rounded-lg text-xs font-bold shadow-lg shadow-[#D43425]/30 active:scale-95 transition-transform"
+                                    >
+                                        ORDER
+                                    </button>
+                                </div>
+                            )}
+
+                            {visualContext.type === 'STATUS_TRACKER' && (
+                                <div className="space-y-2">
+                                    <h3 className="text-xs font-black uppercase tracking-widest text-[#D43425]/60">Kitchen Live Link</h3>
+                                    <div className="h-1 w-full bg-[#FAF7F2] rounded-full overflow-hidden">
+                                        <motion.div
+                                            initial={{ width: "0%" }}
+                                            animate={{ width: "60%" }}
+                                            className="h-full bg-[#D43425]"
+                                        />
+                                    </div>
+                                    <div className="flex justify-between text-[10px] font-bold text-ink/40 uppercase">
+                                        <span>Received</span>
+                                        <span className="text-[#D43425]">Preparing</span>
+                                        <span>Served</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visualContext.type === 'ORDER_SUMMARY' && (
+                                <div className="text-center space-y-3">
+                                    <div className="w-8 h-8 mx-auto bg-[#D43425]/10 rounded-full flex items-center justify-center">
+                                        <span className="text-sm">🧾</span>
+                                    </div>
+                                    <h3 className="text-sm font-playfair font-bold text-[#1A1A1A]">Digital Bill Generated</h3>
+                                    <p className="text-xs text-ink/60 px-4">Your order has been summarized. Shall I proceed to charge this to Table {tableCode}?</p>
+                                    <div className="flex gap-2 justify-center pt-1">
+                                        <button
+                                            onClick={() => setVisualContext(null)} // Dismiss
+                                            className="px-4 py-2 rounded-lg text-xs font-bold text-ink/40 hover:bg-black/5"
+                                        >
+                                            Review
+                                        </button>
+                                        <button
+                                            onClick={() => handleSendMessage("Yes, finalize the payment.")}
+                                            className="bg-[#1A1A1A] text-white px-4 py-2 rounded-lg text-xs font-bold shadow-lg active:scale-95 transition-transform"
+                                        >
+                                            Pay Now
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Close Button */}
+                            <button
+                                onClick={() => setVisualContext(null)}
+                                className="absolute -top-2 -right-2 bg-white rounded-full p-1 shadow-md border border-gray-100 hover:scale-110 transition-transform"
+                            >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#D43425" strokeWidth="3"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Transcript Area (Vellum Ledger) */}
+            <div className="relative z-10 w-full max-w-md mt-4 mb-28">
+                {/* Vellum Texture Container */}
+                <div className="bg-[#FAF7F2] rounded-xl p-6 min-h-[140px] border border-[#D43425]/10 shadow-[inner_0_2px_4px_rgba(0,0,0,0.05)] relative overflow-hidden">
+                    {/* Paper Texture Overlay */}
+                    <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/parchment.png')]" />
+
+                    {/* Top Ledger Line */}
+                    <div className="absolute top-0 left-0 w-full h-1 bg-linear-to-r from-transparent via-[#D43425]/20 to-transparent" />
+
+                    <div className="space-y-4 relative z-10">
+                        <AnimatePresence mode="wait">
+                            {messages.length === 0 ? (
+                                <motion.p
+                                    initial={{ opacity: 0 }}
+                                    animate={{ opacity: 1 }}
+                                    className="text-center text-[10px] sm:text-[11px] font-medium text-ink/40 italic leading-relaxed uppercase tracking-wider pt-4"
+                                >
+                                    "Good afternoon sir. I am listening... Tell me what your heart desires or ask for my humble recommendations."
+                                </motion.p>
+                            ) : (
+                                <div className="space-y-4">
+                                    {messages.slice(-2).map((m: any) => (
+                                        <motion.div
+                                            key={m.id}
+                                            initial={{ opacity: 0, x: m.role === 'user' ? 10 : -10 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            className={`text-sm ${m.role === 'user' ? 'text-ink/60 text-right font-medium' : 'text-[#3D2329] font-playfair italic font-bold'}`}
+                                        >
+                                            <div className="leading-relaxed">
+                                                {m.role === 'user' ? `“${m.content}”` : m.content.replace(/\[UI:.*?\]/g, '')}
+                                            </div>
+                                            {m.role !== 'user' && <div className="w-8 h-px bg-[#D43425]/20 mt-2" />}
+                                        </motion.div>
+                                    ))}
+                                </div>
+                            )}
+                        </AnimatePresence>
+
+                        {isLoading && aiState === 'thinking' && (
+                            <div className="flex justify-start gap-1 items-center pt-2">
+                                <span className="text-[8px] font-bold text-[#D43425]/40 uppercase tracking-widest mr-2">Consulting Ledger</span>
+                                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1 }} className="w-1 h-1 rounded-full bg-[#D43425]" />
+                                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="w-1 h-1 rounded-full bg-[#D43425]" />
+                                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="w-1 h-1 rounded-full bg-[#D43425]" />
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Floating Query Pills (Final Wind-up UX) */}
+                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                    {[
+                        "What do you recommend?",
+                        "Check my order",
+                        "I'm ready for the bill"
+                    ].map((pill, idx) => (
+                        <motion.button
+                            key={idx}
+                            whileHover={{ scale: 1.05, backgroundColor: "#D43425", color: "white" }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={() => handleSendMessage(pill)}
+                            className="px-4 py-2 rounded-full border border-[#D43425]/20 text-[9px] font-black uppercase tracking-widest text-[#D43425] transition-colors"
+                        >
+                            {pill}
+                        </motion.button>
+                    ))}
                 </div>
             </div>
 
-            {/* Floating Tray Summary - MOBILE FIX */}
-            {basket.length > 0 && (
-                <div className="fixed bottom-24 md:bottom-32 left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-12 z-110 animate-in slide-in-from-bottom-8 md:slide-in-from-right-8 w-[90vw] md:w-auto">
-                    <div className="bg-[#D43425] text-white px-5 md:px-6 py-3.5 md:py-4 rounded-full shadow-2xl flex items-center justify-between md:justify-start gap-4 md:gap-6">
-                        <div className="flex flex-col">
-                            <span className="text-[7px] md:text-[8px] font-black uppercase tracking-[0.2em] opacity-60">Selection Active</span>
-                            <span className="text-[10px] md:text-xs font-bold leading-none">{basket.length} Selected</span>
-                        </div>
-                        <div className="hidden md:block w-px h-6 bg-white/20" />
-                        <button
-                            onClick={() => router.push('/order-status')}
-                            className="text-[9px] md:text-[10px] font-black uppercase tracking-[0.2em] bg-white text-[#D43425] px-4 md:px-5 py-2 md:py-2.5 rounded-full hover:bg-black hover:text-white transition-all shadow-lg"
-                        >
-                            Execute Order
-                        </button>
-                    </div>
-                </div>
-            )}
+            <MobileNav />
         </main>
     );
 }

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, Suspense } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
+import MobileNav from '@/components/public/MobileNav';
 
 // ============================================
 // Types
@@ -20,6 +21,7 @@ interface OrderData {
     id: string;
     status: string;
     total: number;
+    version: number;
     items: OrderItem[];
 }
 
@@ -45,11 +47,17 @@ function OrderStatusContent() {
     const [isWaiterPeeking, setIsWaiterPeeking] = useState(true);
     const [isRequesting, setIsRequesting] = useState(false);
 
+    // Identity Modal State
+    const [showIdentityModal, setShowIdentityModal] = useState(false);
+    const [guestNameInput, setGuestNameInput] = useState('');
+    const [submittingIdentity, setSubmittingIdentity] = useState(false);
+
     const statusLabels = [
         { label: 'Order Logged', description: 'Your selection is secured in our system.' },
         { label: 'Chef Preparing', description: 'Crafting your masterpieces with precision.' },
         { label: 'Quality Check', description: 'Ensuring every detail meets our standards.' },
-        { label: 'Ready for Service', description: 'Your culinary journey is arriving shortly.' }
+        { label: 'Ready for Service', description: 'Your culinary journey is arriving shortly.' },
+        { label: 'Served', description: 'The masterpiece has arrived. Enjoy your meal.' }
     ];
 
     // ============================================
@@ -65,11 +73,21 @@ function OrderStatusContent() {
 
             if (!data.success || !data.order) throw new Error(data.error || 'Order not found');
 
+            // Identity Isolation Check: Hide old orders (null sessionId) or mismatched ones
+            const savedSessionId = localStorage.getItem('hp_session_id');
+            if (data.order.sessionId !== savedSessionId) {
+                console.warn('[ORDER STATUS] Identity mismatch or legacy order. Hiding.');
+                setOrder(null);
+                setLoading(false);
+                return;
+            }
+
             const o = data.order;
             setOrder({
                 id: o.id,
                 status: o.status,
                 total: o.total,
+                version: o.version,
                 items: o.items.map((item: any) => ({
                     id: item.id,
                     name: item.itemName,
@@ -78,12 +96,18 @@ function OrderStatusContent() {
                 }))
             });
 
-            // Status Mapping
+            // Improved Status Mapping
             switch (o.status) {
                 case 'NEW': setStep(0); break;
                 case 'PREPARING': setStep(1); break;
                 case 'READY': setStep(2); break;
-                case 'SERVED': setStep(3); break;
+                case 'SERVED': setStep(4); break; // Move to the final 'Served' step
+                case 'BILL_REQUESTED': setStep(4); break;
+                case 'CLOSED':
+                    localStorage.removeItem('hp_active_order_id');
+                    localStorage.removeItem('hp_session_id');
+                    router.replace('/welcome-guest');
+                    break;
                 default: setStep(0);
             }
 
@@ -91,7 +115,7 @@ function OrderStatusContent() {
         } catch (err) {
             console.error('[ORDER STATUS] Error:', err);
         }
-    }, [orderId]);
+    }, [orderId, router]);
 
     useEffect(() => {
         setMounted(true);
@@ -146,28 +170,28 @@ function OrderStatusContent() {
                 </div>
 
                 <div className="flex items-center gap-6">
+                    <Link href="/menu?append=true" className="text-[9px] font-black uppercase tracking-widest text-[#EFE7D9] bg-[#D43425]/20 px-4 py-2 rounded-full border border-[#D43425]/30 hover:bg-[#D43425] transition-all">Add More Delicacies</Link>
+                    <div className="w-px h-4 bg-[#EFE7D9]/20" />
                     <Link href="/home" className="text-[9px] font-black uppercase tracking-widest text-[#EFE7D9] hover:text-[#D43425] transition-colors">Home</Link>
-                    <div className="w-[1px] h-4 bg-[#EFE7D9]/20" />
-                    <Link href="/menu" className="text-[9px] font-black uppercase tracking-widest text-[#EFE7D9] hover:text-[#D43425] transition-colors">Return to Ledger</Link>
                 </div>
             </header>
 
             <div className="max-w-6xl mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 gap-12 md:gap-20 items-start">
-                <div className="space-y-12 py-10">
-                    <div className="space-y-4">
-                        <span className="inline-block px-3 py-1 bg-[#D43425]/10 text-[#D43425] text-[9px] font-black tracking-[0.4em] uppercase rounded-sm">
+                <div className="space-y-8 md:space-y-12 py-6 md:py-10">
+                    <div className="space-y-3 md:space-y-4 text-center lg:text-left">
+                        <span className="inline-block px-3 py-1 bg-[#D43425]/10 text-[#D43425] text-[8px] sm:text-[9px] font-black tracking-[0.4em] uppercase rounded-sm">
                             Status: {statusLabels[step].label}
                         </span>
-                        <h1 className="text-4xl md:text-6xl font-playfair font-black text-ink leading-[1.1]">
+                        <h1 className="text-3xl sm:text-4xl md:text-6xl font-playfair font-black text-ink leading-[1.1]">
                             Tracking Your <br />
                             <span className="italic text-[#D43425]">Culinary Quest</span>
                         </h1>
                     </div>
 
-                    <div className="relative space-y-12 before:absolute before:left-[19px] before:top-2 before:bottom-2 before:w-[2px] before:bg-ink/5">
+                    <div className="relative space-y-10 md:space-y-12 before:absolute before:left-[19px] before:top-2 before:bottom-2 before:w-[2px] before:bg-ink/5">
                         {statusLabels.map((s, idx) => (
-                            <div key={idx} className={`relative flex gap-10 transition-all duration-1000 ${idx <= step ? 'opacity-100' : 'opacity-20'}`}>
-                                <div className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-700 z-10 ${idx === step ? 'bg-ink border-ink animate-pulse text-white shadow-[0_0_15px_rgba(0,0,0,0.2)]' : idx < step ? 'bg-[#D43425] border-[#D43425] text-white' : 'bg-white/50 border-ink/10 text-ink/30'}`}>
+                            <div key={idx} className={`relative flex gap-6 sm:gap-10 transition-all duration-1000 ${idx <= step ? 'opacity-100' : 'opacity-20'}`}>
+                                <div className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-700 z-10 ${idx === step ? 'bg-ink border-ink animate-pulse text-white shadow-lg' : idx < step ? 'bg-[#D43425] border-[#D43425] text-white' : 'bg-white/50 border-ink/10 text-ink/30'}`}>
                                     {idx < step ? (
                                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5">
                                             <polyline points="20 6 9 17 4 12"></polyline>
@@ -177,8 +201,8 @@ function OrderStatusContent() {
                                     )}
                                 </div>
                                 <div className={`space-y-1 ${idx === step ? 'animate-ink-spread' : ''}`}>
-                                    <h3 className={`text-xl font-black uppercase tracking-widest font-playfair ${idx === step ? 'text-ink' : 'text-ink/60'}`}>{s.label}</h3>
-                                    <p className="text-[10px] font-bold uppercase tracking-wider text-ink/40 leading-relaxed italic max-w-xs">{s.description}</p>
+                                    <h3 className={`text-lg sm:text-xl font-black uppercase tracking-widest font-playfair ${idx === step ? 'text-ink' : 'text-ink/60'}`}>{s.label}</h3>
+                                    <p className="text-[9px] sm:text-[10px] font-bold uppercase tracking-wider text-ink/40 leading-relaxed italic max-w-xs">{s.description}</p>
                                 </div>
                             </div>
                         ))}
@@ -218,36 +242,96 @@ function OrderStatusContent() {
                                                 <span className="font-black text-ink tabular-nums">₹{(item.price * item.qty).toLocaleString()}</span>
                                             </div>
                                         ))}
-                                        <div className="pt-4 border-t border-ink/5 flex justify-between items-baseline">
+
+                                        <div className="pt-4 border-t border-ink/5 space-y-2 text-[10px] uppercase font-bold tracking-widest opacity-40">
+                                            <div className="flex justify-between">
+                                                <span>Sub-Total</span>
+                                                <span>₹{order.total.toLocaleString()}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span>GST (5%)</span>
+                                                <span>₹{(order.total * 0.05).toLocaleString()}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span>Imperial Service (5%)</span>
+                                                <span>₹{(order.total * 0.05).toLocaleString()}</span>
+                                            </div>
+                                        </div>
+
+                                        <div className="pt-4 border-t-2 border-ink/10 flex justify-between items-baseline">
                                             <span className="text-sm font-black uppercase tracking-widest opacity-30">Total Value</span>
-                                            <span className="text-3xl font-black text-[#D43425] tabular-nums">₹{order.total.toLocaleString()}</span>
+                                            <span className="text-3xl font-black text-[#D43425] tabular-nums">₹{(order.total * 1.1).toLocaleString()}</span>
                                         </div>
                                     </div>
                                 </div>
 
                                 <div className="pt-6 space-y-4">
-                                    <button
-                                        onClick={handleRequestWaiter}
-                                        className="w-full py-5 bg-[#3D2329] text-[#EFE7D9] rounded-2xl font-black text-xs uppercase tracking-[0.4em] hover:bg-[#D43425] transition-all transform active:scale-95 shadow-xl group border border-[#D43425]/30"
-                                    >
-                                        {isRequesting ? "Summoning..." : "Request Waiter"}
-                                    </button>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <Link
+                                            href="/menu?append=true"
+                                            className="flex items-center justify-center py-5 bg-white text-[#111111] rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] hover:bg-zinc-50 transition-all shadow-md border border-zinc-100"
+                                        >
+                                            + Add Extra
+                                        </Link>
+                                        <button
+                                            onClick={handleRequestWaiter}
+                                            className="py-5 bg-[#3D2329] text-[#EFE7D9] rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] hover:bg-[#D43425] transition-all shadow-md border border-[#D43425]/30"
+                                        >
+                                            {isRequesting ? "Summoning..." : "Call Waiter"}
+                                        </button>
+                                    </div>
+
+                                    {['SERVED', 'READY'].includes(order.status) && (
+                                        <button
+                                            onClick={() => {
+                                                const savedName = localStorage.getItem('hp_guest_name');
+                                                if (!savedName) {
+                                                    setShowIdentityModal(true);
+                                                } else {
+                                                    // Proceed directly
+                                                    setIsRequesting(true);
+                                                    fetch(`/api/orders/${order.id}`, {
+                                                        method: 'PATCH',
+                                                        headers: { 'Content-Type': 'application/json' },
+                                                        body: JSON.stringify({ status: 'BILL_REQUESTED', version: order.version })
+                                                    }).then(res => {
+                                                        if (res.ok) fetchOrderStatus();
+                                                        setTimeout(() => setIsRequesting(false), 2000);
+                                                    });
+                                                }
+                                            }}
+                                            className="w-full py-5 bg-[#D43425] text-white rounded-2xl font-black text-xs uppercase tracking-[0.4em] hover:bg-black transition-all transform active:scale-95 shadow-xl border border-white/10"
+                                        >
+                                            {isRequesting ? "Requesting..." : "Request Final Bill"}
+                                        </button>
+                                    )}
 
                                     <div className="flex items-center justify-center gap-3 py-4 opacity-30">
-                                        <div className="h-px flex-grow bg-ink" />
+                                        <div className="h-px grow bg-ink" />
                                         <span className="text-[8px] font-black uppercase tracking-[0.5em]">Finis</span>
-                                        <div className="h-px flex-grow bg-ink" />
+                                        <div className="h-px grow bg-ink" />
                                     </div>
                                 </div>
                             </div>
 
                             <div className="bg-[#EFE7D9] p-6 flex items-center gap-4 border-t border-ink/5">
-                                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-lg border border-[#D43425]/20 animate-float">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D43425" strokeWidth="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-lg border border-[#D43425]/20">
+                                    <div className="text-[#D43425] font-black text-[10px]">
+                                        {step < 4 ? "EST" : "✓"}
+                                    </div>
                                 </div>
-                                <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-ink/70 leading-relaxed italic">
-                                    Live order fulfillment tracking. Gratuity and imperial fees included in the ledger.
-                                </p>
+                                <div className="flex flex-col">
+                                    <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-ink/70 leading-relaxed italic">
+                                        {step < 2 ? "Chef is currently hand-crafting your selection." :
+                                            step < 4 ? "Final plating and quality inspection in progress." :
+                                                "Your journey is complete. We hope you enjoyed it."}
+                                    </p>
+                                    {step < 4 && (
+                                        <span className="text-[8px] font-black text-[#D43425] uppercase tracking-widest mt-1">
+                                            Arrival Prediction: ~{step === 0 ? '15-20' : step === 1 ? '8-12' : '3-5'} Minutes
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -273,7 +357,7 @@ function OrderStatusContent() {
 
                         <div className={`relative w-40 h-56 md:w-56 md:h-72 transition-all duration-500 transform origin-right ${isRequesting ? 'animate-owl-hop' : ''}`}>
                             <Image
-                                src="/images/avatars/master_waiter.png"
+                                src="/images/waiter.png"
                                 alt="Service Concierge"
                                 fill
                                 priority
@@ -284,11 +368,71 @@ function OrderStatusContent() {
                 </div>
             </div>
 
-            {/* Subtle Footer Decor */}
-            <footer className="fixed bottom-0 w-full px-12 py-8 flex justify-between items-center pointer-events-none opacity-10">
-                <p className="text-[9px] font-bold uppercase tracking-[0.4em]">AUTHENTIC HOSPITALITY INDEX</p>
-                <div className="font-playfair italic text-xl">HotelPro Reserve</div>
-            </footer>
+            <div className="h-32 md:h-40" />
+
+            {/* Premium Navigation Dock */}
+            <MobileNav />
+
+            {/* IDENTITY MODAL FOR BILLING */}
+            {showIdentityModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
+                    <div className="bg-vellum w-full max-w-sm rounded-[2rem] p-8 shadow-2xl border border-[#D43425]/20 animate-in zoom-in-05 duration-300">
+                        <div className="text-center mb-6">
+                            <h2 className="text-3xl font-playfair font-black text-ink italic">The Final Touch</h2>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-[#D43425] mt-2">Who shall we address this bill to?</p>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-[8px] font-black uppercase tracking-widest opacity-40 mb-2 pl-2">Guest Name</label>
+                                <input
+                                    autoFocus
+                                    type="text"
+                                    value={guestNameInput}
+                                    onChange={(e) => setGuestNameInput(e.target.value)}
+                                    placeholder="Enter your name"
+                                    className="w-full bg-white border border-ink/10 rounded-xl px-4 py-4 font-playfair font-bold text-lg outline-none focus:border-[#D43425] transition-colors"
+                                />
+                            </div>
+
+                            <button
+                                onClick={async () => {
+                                    if (!guestNameInput.trim() || !order) return;
+                                    setSubmittingIdentity(true);
+                                    try {
+                                        localStorage.setItem('hp_guest_name', guestNameInput);
+                                        const res = await fetch(`/api/orders/${order.id}`, {
+                                            method: 'PATCH',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                status: 'BILL_REQUESTED',
+                                                customerName: guestNameInput,
+                                                version: order.version
+                                            })
+                                        });
+                                        if (res.ok) {
+                                            setShowIdentityModal(false);
+                                            fetchOrderStatus();
+                                        }
+                                    } catch (e) { console.error(e); }
+                                    finally { setSubmittingIdentity(false); }
+                                }}
+                                disabled={submittingIdentity || !guestNameInput.trim()}
+                                className="w-full py-5 bg-[#D43425] text-white rounded-xl font-black text-xs uppercase tracking-[0.3em] hover:bg-black transition-all shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {submittingIdentity ? 'Finalizing...' : 'Review Bill'}
+                            </button>
+
+                            <button
+                                onClick={() => setShowIdentityModal(false)}
+                                className="w-full py-3 text-[9px] font-bold uppercase tracking-widest opacity-40 hover:opacity-100"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </main>
     );
 }

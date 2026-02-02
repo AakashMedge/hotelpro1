@@ -37,6 +37,8 @@ interface OrderResponse {
     total: number;
     createdAt: string;
     closedAt?: string;
+    customerName: string | null;
+    sessionId: string | null;
 }
 
 interface OrderSuccessResponse {
@@ -92,6 +94,8 @@ export async function GET(
             total,
             createdAt: order.createdAt.toISOString(),
             closedAt: order.closedAt?.toISOString(),
+            customerName: order.customerName,
+            sessionId: order.sessionId,
         };
 
         return NextResponse.json({
@@ -207,6 +211,8 @@ export async function PATCH(
             total,
             createdAt: order.createdAt.toISOString(),
             closedAt: order.closedAt?.toISOString(),
+            customerName: order.customerName,
+            sessionId: order.sessionId,
         };
 
         console.log(`[ORDER API] Order ${id} status updated to ${status}`);

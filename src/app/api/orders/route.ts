@@ -7,6 +7,7 @@
  * This is the HEART of the POS system.
  */
 
+import { aj } from "@/lib/arcjet";
 import { NextRequest, NextResponse } from "next/server";
 import {
     createOrder,
@@ -80,9 +81,22 @@ interface OrdersListResponse {
  *   order: { id, tableCode, status, items, total, createdAt }
  * }
  */
+
 export async function POST(
     request: NextRequest
 ): Promise<NextResponse<CreateOrderSuccessResponse | OrderErrorResponse>> {
+    // 0. Security Layer: Arcjet
+    const decision = await aj.protect(request);
+    if (decision.isDenied()) {
+        if (decision.reason.isRateLimit()) {
+            return NextResponse.json({ success: false, error: "Too many requests. Please slow down." }, { status: 429 });
+        }
+        if (decision.reason.isBot()) {
+            return NextResponse.json({ success: false, error: "Bots are not allowed." }, { status: 403 });
+        }
+        return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
+    }
+
     try {
         // Parse request body
         const body = await request.json().catch(() => null);
@@ -95,7 +109,7 @@ export async function POST(
         }
 
         // Validate required fields
-        const { tableId, tableCode, items, customerName } = body as any;
+        const { tableId, tableCode, items, customerName, sessionId } = body as any;
 
         let resolvedTableId = tableId;
 
@@ -155,7 +169,7 @@ export async function POST(
         }
 
         // Create order via service
-        const order = await createOrder({ tableId: resolvedTableId, items, customerName });
+        const order = await createOrder({ tableId: resolvedTableId, items, customerName, sessionId });
 
         // Calculate total
         const total = order.items.reduce((sum, item) => {

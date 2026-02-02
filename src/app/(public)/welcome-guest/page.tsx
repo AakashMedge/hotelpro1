@@ -1,218 +1,287 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
+import MobileNav from '@/components/public/MobileNav';
 
-export default function WelcomeGuest() {
-    const [step, setStep] = useState(0); // 0: Namaste, 1: Identity, 2: Verification/Table, 3: Choice
-    const [formData, setFormData] = useState({
-        name: '',
-        phone: '',
-        tableNo: '',
-        isVerified: false
-    });
+function WelcomeGuestContent() {
+    const searchParams = useSearchParams();
     const router = useRouter();
+    const queryTable = searchParams.get('table');
+
+    // Step 0: Namaste, 1: Entrance, 3: Table Check, 4: Choice (Step 2 Identity Removed)
+    const [step, setStep] = useState(0);
+    const [entryType, setEntryType] = useState<'SCAN' | 'BOOK' | null>(queryTable ? 'SCAN' : null);
+    const [loadingTable, setLoadingTable] = useState(false);
+    const [tableStatus, setTableStatus] = useState<{
+        id: string;
+        status: string;
+        activeOrder: any;
+        tableCode: string;
+    } | null>(null);
+    const [vacantTables, setVacantTables] = useState<any[]>([]);
+
+    const [formData, setFormData] = useState({
+        tableNo: queryTable || '',
+    });
 
     useEffect(() => {
         if (step === 0) {
-            const timer = setTimeout(() => setStep(1), 3500);
+            const timer = setTimeout(() => {
+                if (queryTable) {
+                    setEntryType('SCAN');
+                    setStep(3); // Direct to Table Check
+                } else {
+                    setStep(1);
+                }
+            }, 2500);
             return () => clearTimeout(timer);
         }
-    }, [step]);
+    }, [step, queryTable]);
 
-    const handleIdentitySubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        setStep(2);
+    useEffect(() => {
+        if (entryType === 'BOOK' && step === 3) {
+            fetchVacantTables();
+        }
+    }, [entryType, step]);
+
+    const fetchVacantTables = async () => {
+        setLoadingTable(true);
+        try {
+            const res = await fetch('/api/tables');
+            const data = await res.json();
+            if (data.success) {
+                setVacantTables(data.tables.filter((t: any) => t.status === 'VACANT'));
+            }
+        } finally {
+            setLoadingTable(false);
+        }
+    };
+
+    const verifyTable = async (code: string) => {
+        if (!code) return;
+        setLoadingTable(true);
+        try {
+            const res = await fetch(`/api/tables?code=${code}`);
+            const data = await res.json();
+            if (data.success && data.tables && data.tables.length > 0) {
+                setTableStatus(data.tables[0]);
+                setFormData(prev => ({ ...prev, tableNo: data.tables[0].tableCode }));
+            } else {
+                setTableStatus(null);
+            }
+        } catch (err) {
+            console.error('Table verification failed', err);
+        } finally {
+            setLoadingTable(false);
+        }
+    };
+
+    const proceedToMenu = (joiningType: 'NEW' | 'JOIN' = 'NEW', specificTable?: string) => {
+        const tableCode = specificTable || formData.tableNo;
+        const sessionId = joiningType === 'JOIN' && tableStatus?.activeOrder?.sessionId
+            ? tableStatus.activeOrder.sessionId
+            : Math.random().toString(36).substring(2, 15);
+
+        // IMPLICIT GUEST ENTRY - Identity collected at Bill Request
+        localStorage.setItem('hp_table_no', tableCode);
+        localStorage.setItem('hp_session_id', sessionId);
+
+        // Clear any old guest name to ensure we are in anonymous mode
+        localStorage.removeItem('hp_guest_name');
+
+        if (joiningType === 'JOIN' && tableStatus?.activeOrder?.id) {
+            localStorage.setItem('hp_active_order_id', tableStatus.activeOrder.id);
+            router.push(`/order-status?id=${tableStatus.activeOrder.id}`);
+        } else {
+            localStorage.removeItem('hp_active_order_id');
+            // SKIP STEP 4 (Choice) - GO DIRECTLY TO MENU
+            router.push('/menu');
+        }
     };
 
     return (
-        <main className="min-h-screen bg-[#EFE7D9] text-black font-sans flex flex-col items-center justify-center p-6 overflow-hidden relative">
+        <main className="min-h-screen bg-vellum text-black font-sans flex flex-col items-center justify-center p-6 overflow-hidden relative">
 
             {/* Step 0: Indian Welcome Animation */}
             {step === 0 && (
                 <div className="flex flex-col items-center text-center animate-in fade-in zoom-in duration-1000">
-                    <div className="w-24 h-24 mb-6 relative">
-                        <div className="absolute inset-0 border-2 border-[#D43425] rounded-full animate-ping opacity-20" />
-                        <div className="absolute inset-2 border border-[#D43425] rounded-full animate-pulse opacity-40" />
-                        <div className="absolute inset-0 flex items-center justify-center text-[#D43425]">
-                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
-                            </svg>
-                        </div>
+                    <div className="-mb-6 relative w-48 h-48 md:w-72 md:h-72">
+                        <Image
+                            src="/images/namaste_hands.png"
+                            alt="Namaste"
+                            fill
+                            className="object-contain"
+                            priority
+                        />
                     </div>
-                    <h1 className="text-6xl md:text-8xl font-playfair font-black italic text-[#D43425] leading-tight">
-                        Namaste.
-                    </h1>
-                    <p className="text-xl md:text-2xl font-playfair font-bold mt-4 uppercase tracking-[0.4em] opacity-80">
-                        Swagaat Hain
-                    </p>
-                    <div className="mt-8 w-1 h-12 bg-[#D43425] animate-bounce" />
+                    <h1 className="text-6xl md:text-8xl font-playfair font-black italic text-[#D43425] leading-tight">Namaste.</h1>
+                    <p className="text-xl md:text-2xl font-playfair font-bold mt-4 uppercase tracking-[0.4em] opacity-80">Swagaat Hain</p>
                 </div>
             )}
 
-            {/* Step 1: Identity Form */}
+            {/* Step 1: Entrance (From Image) */}
             {step === 1 && (
-                <div className="w-full max-w-xl animate-in slide-in-from-bottom-12 duration-1000">
-                    <header className="mb-12 text-center md:text-left">
-                        <h2 className="text-[#D43425] text-[10px] font-black tracking-[0.5em] uppercase mb-4">Identity Verification</h2>
-                        <h1 className="text-4xl md:text-6xl font-playfair font-black leading-tight">Your Digital<br />Credential</h1>
-                    </header>
+                <div className="w-full max-w-xl animate-in fade-in slide-in-from-bottom-8 duration-1000 flex flex-col items-center">
+                    <div className="relative mb-16 flex flex-col items-center text-center">
+                        <div className="absolute inset-0 bg-[#D43425]/5 rounded-full blur-3xl -z-10" />
+                        <p className="text-[#D43425] text-[10px] md:text-[12px] font-black tracking-[0.5em] uppercase mb-4">Private Residence</p>
+                        <h1 className="text-6xl md:text-8xl font-playfair font-black text-ink leading-none">HOTEL<br /><span className="text-[#D43425]">PRO</span></h1>
+                        <p className="text-[10px] font-bold uppercase tracking-[0.3em] opacity-40 mt-6 italic">Premium Suite & Elite Hospitality</p>
+                    </div>
 
-                    <form onSubmit={handleIdentitySubmit} className="space-y-8">
-                        <div className="group border-b-2 border-black/10 focus-within:border-[#D43425] transition-colors pb-4">
-                            <label className="block text-[10px] font-black tracking-widest uppercase opacity-40 mb-2">Guest Name</label>
-                            <input
-                                required
-                                type="text"
-                                placeholder="Enter your full name"
-                                className="w-full bg-transparent text-2xl font-playfair font-bold placeholder:opacity-20 outline-none"
-                                value={formData.name}
-                                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            />
-                        </div>
-
-                        <div className="group border-b-2 border-black/10 focus-within:border-[#D43425] transition-colors pb-4">
-                            <label className="block text-[10px] font-black tracking-widest uppercase opacity-40 mb-2">Contact Number</label>
-                            <input
-                                required
-                                type="tel"
-                                placeholder="+91  XXXXX XXXXX"
-                                className="w-full bg-transparent text-2xl font-playfair font-bold placeholder:opacity-20 outline-none"
-                                value={formData.phone}
-                                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                            />
-                        </div>
-
-                        <button type="submit" className="w-full py-5 bg-[#D43425] text-white font-black text-xs uppercase tracking-[0.4em] rounded-full shadow-xl hover:bg-black transition-all transform hover:scale-[1.02] active:scale-95">
-                            Secure Identity & Continue
+                    <div className="grid grid-cols-2 gap-6 w-full max-w-sm">
+                        <button
+                            onClick={() => { setEntryType('SCAN'); setStep(3); }}
+                            className="bg-white border-2 border-[#D43425]/10 rounded-[3rem] p-8 aspect-square flex flex-col items-center justify-center gap-6 group hover:border-[#D43425] transition-all shadow-sm hover:shadow-xl"
+                        >
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#D43425" strokeWidth="1.5">
+                                <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2" />
+                                <rect x="7" y="7" width="10" height="10" rx="1" />
+                            </svg>
+                            <div className="text-[9px] font-black uppercase tracking-[0.2em] text-ink group-hover:text-[#D43425]">Scan the QR</div>
                         </button>
-                    </form>
+                        <button
+                            onClick={() => { setEntryType('BOOK'); setStep(3); }}
+                            className="bg-[#D43425] rounded-[3rem] p-8 aspect-square flex flex-col items-center justify-center gap-6 group hover:bg-black transition-all shadow-2xl"
+                        >
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5">
+                                <circle cx="12" cy="12" r="10" />
+                                <line x1="12" y1="8" x2="12" y2="16" />
+                                <line x1="8" y1="12" x2="16" y2="12" />
+                            </svg>
+                            <div className="text-[9px] font-black uppercase tracking-[0.2em] text-white">Book a Table</div>
+                        </button>
+                    </div>
                 </div>
             )}
 
-            {/* Step 2: Verification & Table */}
-            {step === 2 && (
-                <div className="w-full max-w-2xl animate-in slide-in-from-right-12 duration-1000 space-y-12">
+
+
+            {/* Step 3: Table Resolution */}
+            {step === 3 && (
+                <div className="w-full max-w-2xl animate-in fade-in slide-in-from-right-8 duration-700 space-y-12">
                     <header className="text-center">
                         <h2 className="text-[#D43425] text-[10px] font-black tracking-[0.5em] uppercase mb-4">Status & Location</h2>
-                        <h1 className="text-4xl md:text-6xl font-playfair font-black leading-tight">Refining Your Stay</h1>
+                        <h1 className="text-4xl md:text-6xl font-playfair font-black leading-tight">{entryType === 'SCAN' ? 'Table Verification' : 'Assign Your Seat'}</h1>
                     </header>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Elite Verification (Optional) */}
-                        <div className="bg-white/40 backdrop-blur-sm border-2 border-dashed border-[#D43425]/30 p-8 rounded-[3rem] space-y-4 hover:border-[#D43425] transition-all group">
-                            <div className="w-12 h-12 bg-[#D43425]/10 rounded-full flex items-center justify-center text-[#D43425]">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <rect x="3" y="4" width="18" height="16" rx="2" />
-                                    <circle cx="9" cy="10" r="2" />
-                                    <path d="M15 8h2m-2 4h2m-2 4h2" />
-                                </svg>
-                            </div>
-                            <h3 className="text-xl font-playfair font-black italic">Elite Verification</h3>
-                            <p className="text-[10px] font-bold uppercase tracking-wider opacity-60 leading-relaxed">
-                                Upload your ID to unlock "Charge-to-Room" privileges and exclusive VIP pricing.
-                            </p>
-                            <button
-                                onClick={() => setFormData({ ...formData, isVerified: true })}
-                                className={`w-full py-3 rounded-full font-black text-[10px] uppercase tracking-widest transition-all ${formData.isVerified ? 'bg-green-600 text-white' : 'bg-black text-white hover:bg-[#D43425]'}`}
-                            >
-                                {formData.isVerified ? 'Verification Complete √' : 'Verify ID Now (Optional)'}
-                            </button>
-                        </div>
+                    <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-[#D43425]/10">
+                        <div className="p-8 md:p-12 space-y-8">
+                            {entryType === 'SCAN' ? (
+                                <>
+                                    <div className="flex flex-col items-center text-center space-y-4">
+                                        <div className="w-20 h-20 bg-vellum rounded-full flex items-center justify-center border border-[#D43425]/20 shadow-inner">
+                                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#D43425" strokeWidth="1.5">
+                                                <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
+                                            </svg>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <h3 className="text-2xl font-playfair font-black text-ink">
+                                                {queryTable ? `Welcome to Table ${queryTable}` : "Identify Your Marker"}
+                                            </h3>
+                                            <p className="text-[10px] font-bold uppercase tracking-widest text-ink/40">
+                                                {loadingTable ? "Consulting floor plan..." : (tableStatus ? `Found: ${tableStatus.tableCode} (${tableStatus.status})` : "Enter the table code from your marker")}
+                                            </p>
+                                        </div>
+                                    </div>
 
-                        {/* Table Assignment */}
-                        <div className="bg-black text-white p-8 rounded-[3rem] space-y-6">
-                            <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
-                                </svg>
-                            </div>
-                            <h3 className="text-xl font-playfair font-black italic">Table Assignment</h3>
-                            <div className="space-y-4">
-                                <input
-                                    type="text"
-                                    placeholder="Enter Table No."
-                                    className="w-full bg-white/5 border border-white/20 rounded-full px-6 py-3 text-center font-bold outline-none focus:border-[#D43425] transition-all"
-                                    value={formData.tableNo}
-                                    onChange={(e) => setFormData({ ...formData, tableNo: e.target.value })}
-                                />
-                                <button
-                                    onClick={() => {
-                                        localStorage.setItem('hp_guest_name', formData.name);
-                                        localStorage.setItem('hp_table_no', formData.tableNo);
-                                        setStep(3);
-                                    }}
-                                    disabled={!formData.tableNo}
-                                    className="w-full py-4 bg-[#D43425] rounded-full font-black text-[10px] uppercase tracking-[0.3em] disabled:opacity-30 disabled:grayscale transition-all active:scale-95"
-                                >
-                                    Proceed to Menu
-                                </button>
-                                <button className="w-full text-[9px] uppercase font-bold tracking-[0.4em] opacity-40 hover:opacity-100 transition-opacity">
-                                    Auto-Detect via QR
-                                </button>
-                            </div>
+                                    {!queryTable && (
+                                        <input
+                                            type="text"
+                                            placeholder="e.g. 1 or T-01"
+                                            className="w-full bg-vellum border-2 border-ink/5 rounded-2xl px-6 py-4 text-center text-xl font-black uppercase tracking-widest outline-none focus:border-[#D43425] transition-all"
+                                            value={formData.tableNo}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                setFormData({ ...formData, tableNo: val });
+                                                if (val.length >= 1) verifyTable(val);
+                                            }}
+                                        />
+                                    )}
+
+                                    {tableStatus && (
+                                        <div className="space-y-4">
+                                            {tableStatus.status === 'DIRTY' ? (
+                                                <div className="bg-amber-50 border border-amber-200 p-6 rounded-2xl text-center space-y-3">
+                                                    <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">Preparation in Progress</p>
+                                                    <p className="text-[10px] text-amber-600 uppercase font-medium">Please allow our steward a moment to perfect your table.</p>
+                                                    <button onClick={() => verifyTable(formData.tableNo)} className="text-[9px] font-black text-amber-800 uppercase underline">Refresh</button>
+                                                </div>
+                                            ) : tableStatus.activeOrder ? (
+                                                <div className="bg-ink text-[#EFE7D9] p-8 rounded-[2.5rem] space-y-6 shadow-xl border border-[#D43425]/30">
+                                                    <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                                                        <div className="flex flex-col">
+                                                            <span className="text-[7px] font-black uppercase tracking-widest opacity-40">Active Session</span>
+                                                            <span className="font-playfair text-xl font-black italic">{tableStatus.activeOrder.customerName}'s Party</span>
+                                                        </div>
+                                                        <div className="w-8 h-8 rounded-full bg-[#D43425] flex items-center justify-center text-[10px] font-black border border-white/20 animate-pulse shadow-[0_0_15px_#D43425]">LIVE</div>
+                                                    </div>
+                                                    <div className="grid grid-cols-1 gap-3">
+                                                        <button onClick={() => proceedToMenu('JOIN')} className="w-full py-4 bg-[#D43425] rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-white hover:text-[#D43425] transition-all">Join This Party</button>
+                                                        <button onClick={() => proceedToMenu('NEW')} className="w-full py-4 bg-white/10 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-white/20 transition-all shadow-inner">Start New Session</button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <button onClick={() => proceedToMenu('NEW')} className="w-full py-6 bg-[#D43425] text-white rounded-2xl font-black text-xs uppercase tracking-[0.4em] shadow-xl hover:bg-black transition-all active:scale-95">Claim Table & Enter</button>
+                                            )}
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="space-y-8">
+                                    <div className="flex flex-col items-center text-center space-y-4">
+                                        <div className="w-20 h-20 bg-vellum rounded-full flex items-center justify-center border border-[#D43425]/20 shadow-inner">
+                                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#D43425" strokeWidth="1.5">
+                                                <path d="M3 11V9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2M5 11l-2 6v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2l-2-6M5 11h14" />
+                                            </svg>
+                                        </div>
+                                        <h3 className="text-2xl font-playfair font-black text-ink">Choose Your Sanctuary</h3>
+                                        <p className="text-[10px] font-bold uppercase tracking-widest text-ink/40 leading-relaxed max-w-[200px]">Select any of our available vacant tables to begin your journey.</p>
+                                    </div>
+
+                                    {loadingTable ? (
+                                        <div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-[#D43425]/10 border-t-[#D43425] rounded-full animate-spin" /></div>
+                                    ) : (
+                                        <div className="grid grid-cols-3 gap-4">
+                                            {vacantTables.map(t => (
+                                                <button
+                                                    key={t.id}
+                                                    onClick={() => proceedToMenu('NEW', t.tableCode)}
+                                                    className="bg-vellum border-2 border-ink/5 rounded-2xl p-4 flex flex-col items-center gap-2 hover:border-[#D43425] transition-all aspect-square justify-center group"
+                                                >
+                                                    <span className="text-sm font-black text-ink group-hover:text-[#D43425]">{t.tableCode}</span>
+                                                    <span className="text-[7px] font-bold uppercase opacity-30">{t.capacity} Seats</span>
+                                                </button>
+                                            ))}
+                                            {vacantTables.length === 0 && (
+                                                <div className="col-span-3 py-10 bg-vellum rounded-2xl text-center">
+                                                    <p className="text-[10px] font-black uppercase tracking-widest opacity-40">All premium tables are occupied.</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Step 3: Choice of Path */}
-            {step === 3 && (
-                <div className="w-full max-w-5xl animate-in zoom-in duration-700 space-y-16">
-                    <header className="text-center space-y-4">
-                        <h1 className="text-5xl md:text-8xl font-playfair font-black italic text-[#D43425] leading-none">
-                            The Path Choice.
-                        </h1>
-                        <p className="text-[10px] font-black uppercase tracking-[0.5em] opacity-40">Welcome, {formData.name}. How shall we serve you?</p>
-                    </header>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                        <button
-                            onClick={() => router.push('/menu')}
-                            className="group relative h-[400px] border-2 border-black rounded-[4rem] overflow-hidden transition-all hover:border-[#D43425] hover:scale-[1.02]"
-                        >
-                            <div className="absolute inset-0 bg-white group-hover:bg-[#F2EDE9] transition-colors" />
-                            <div className="absolute bottom-12 left-12 right-12 text-left space-y-4">
-                                <div className="w-16 h-1 bg-black group-hover:bg-[#D43425] transition-colors" />
-                                <h3 className="text-4xl font-playfair font-black italic">Traditional Dining</h3>
-                                <p className="text-xs font-bold uppercase tracking-widest opacity-40 leading-relaxed">
-                                    Browse our curated editorial menu and order at your own pace.
-                                </p>
-                            </div>
-                            <div className="absolute top-12 right-12 w-12 h-12 border border-black rounded-full flex items-center justify-center group-hover:bg-[#D43425] group-hover:border-[#D43425] group-hover:text-white transition-all">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                    <line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline>
-                                </svg>
-                            </div>
-                        </button>
 
-                        <button
-                            onClick={() => router.push('/ai-assistant')}
-                            className="group relative h-[400px] bg-[#D43425] rounded-[4rem] overflow-hidden transition-all hover:scale-[1.02] shadow-2xl"
-                        >
-                            <div className="absolute inset-0 bg-linear-to-br from-[#D43425] to-[#8B0000]" />
-                            <div className="absolute bottom-12 left-12 right-12 text-left text-white space-y-4">
-                                <div className="w-16 h-1 bg-white" />
-                                <h3 className="text-4xl font-playfair font-black italic">A.I. Concierge</h3>
-                                <p className="text-xs font-bold uppercase tracking-widest opacity-60 leading-relaxed">
-                                    Experience personalized recommendations via our interactive AI Avatar.
-                                </p>
-                            </div>
-                            <div className="absolute top-12 right-12 w-16 h-16 bg-white/10 rounded-full flex items-center justify-center animate-pulse">
-                                <div className="w-8 h-8 rounded-full bg-white/20 animate-ping" />
-                            </div>
-                            <div className="absolute -right-20 -top-20 w-80 h-80 bg-white/5 rounded-full blur-3xl group-hover:bg-white/10 transition-all" />
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Footer Branding Overlay */}
-            <div className="fixed bottom-12 right-12 text-right opacity-20 hidden md:block">
-                <div className="text-[#D43425] font-black text-2xl tracking-tighter">HOTELPRO</div>
-                <p className="text-[9px] uppercase font-bold tracking-[0.4em]">Integrated Hospitality</p>
-            </div>
+            {/* Premium Navigation Dock - Only show after identity check */}
+            {step >= 3 && <MobileNav />}
         </main>
+    );
+}
+
+export default function WelcomeGuest() {
+    return (
+        <Suspense fallback={<div className="min-h-screen bg-vellum flex items-center justify-center"><div className="w-12 h-12 border-4 border-[#D43425]/20 border-t-[#D43425] rounded-full animate-spin" /></div>}>
+            <WelcomeGuestContent />
+        </Suspense>
     );
 }

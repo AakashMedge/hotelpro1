@@ -15,6 +15,7 @@ import type { Order, OrderItem, OrderStatus, OrderItemStatus, Prisma } from "@/g
 export interface CreateOrderInput {
     tableId: string;
     customerName?: string;
+    sessionId?: string;
     items: CreateOrderItemInput[];
 }
 
@@ -59,7 +60,7 @@ export interface OrderItemWithMenuItem extends OrderItem {
  * @returns The created order with items
  */
 export async function createOrder(input: CreateOrderInput): Promise<OrderWithItems> {
-    const { tableId, items, customerName } = input;
+    const { tableId, items, customerName, sessionId } = input;
 
     // Validate input
     if (!tableId) {
@@ -129,6 +130,7 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithIte
             data: {
                 tableId,
                 customerName,
+                sessionId,
                 status: "NEW",
                 version: 1,
             },

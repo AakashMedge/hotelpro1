@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
+import MobileNav from '@/components/public/MobileNav';
 
 // ============================================
 // Types
@@ -55,7 +56,9 @@ export default function MenuPage() {
     const [activeCategory, setActiveCategory] = useState('');
     const [categories, setCategories] = useState<string[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-    const [basket, setBasket] = useState<string[]>([]); // Array of item IDs
+    const [basket, setBasket] = useState<Record<string, number>>({});
+    const [alreadyOrdered, setAlreadyOrdered] = useState<Record<string, number>>({});
+    const [isCartOpen, setIsCartOpen] = useState(false);
 
     const [isMenuRevealed, setIsMenuRevealed] = useState(false);
     const [isCasting, setIsCasting] = useState(false);
@@ -84,14 +87,21 @@ export default function MenuPage() {
                     const orderRes = await fetch(`/api/orders/${activeOrderId}`);
                     if (orderRes.ok) {
                         const orderData = await orderRes.json();
-                        // If order exists and is ACTIVE (not CLOSED), redirect to status page
                         if (orderData.success && orderData.order && orderData.order.status !== 'CLOSED') {
-                            console.log('[MENU] Restoring active session:', activeOrderId);
-                            router.replace(`/order-status?id=${activeOrderId}`);
-                            return; // Stop loading the menu, we are redirecting
-                        } else {
-                            // Order is closed (paid), clear the session for a fresh start
-                            console.log('[MENU] Previous order closed, clearing session.');
+                            // Fetch what's already ordered to show markers
+                            const orderedMap: Record<string, number> = {};
+                            orderData.order.items.forEach((item: any) => {
+                                orderedMap[item.menuItemId] = (orderedMap[item.menuItemId] || 0) + item.quantity;
+                            });
+                            setAlreadyOrdered(orderedMap);
+
+                            // Only redirect if NOT explicitly appending
+                            const isAppending = new URLSearchParams(window.location.search).get('append') === 'true';
+                            if (!isAppending) {
+                                router.replace(`/order-status?id=${activeOrderId}`);
+                                return;
+                            }
+                        } else if (orderData.order && orderData.order.status === 'CLOSED') {
                             localStorage.removeItem('hp_active_order_id');
                         }
                     }
@@ -163,11 +173,22 @@ export default function MenuPage() {
 
     const filteredItems = menuItems.filter(item => item.category === activeCategory);
 
-    const toggleBasket = (id: string) => {
-        setBasket(prev =>
-            prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
-        );
+    const updateQuantity = (id: string, delta: number) => {
+        setBasket(prev => {
+            const next = { ...prev };
+            const current = next[id] || 0;
+            const updated = current + delta;
+            if (updated <= 0) delete next[id];
+            else next[id] = updated;
+            return next;
+        });
     };
+
+    const basketCount = Object.values(basket).reduce((a, b) => a + b, 0);
+    const basketTotal = Object.entries(basket).reduce((sum, [id, qty]) => {
+        const item = menuItems.find(m => m.id === id);
+        return sum + (item?.priceRaw || 0) * qty;
+    }, 0);
 
     const triggerMagic = () => {
         setIsCasting(true);
@@ -186,53 +207,66 @@ export default function MenuPage() {
     };
 
     useEffect(() => {
-        if (basket.length > 0) {
+        if (basketCount > 0) {
             setIsCartJoyful(true);
             setIsOwlPeeking(true);
             const timer = setTimeout(() => setIsCartJoyful(false), 500);
             return () => clearTimeout(timer);
         }
-    }, [basket.length]);
+    }, [basketCount]);
 
     // ============================================
     // Execute Order
     // ============================================
 
     const executeOrder = async () => {
-        if ((!tableId && !tableCode) || basket.length === 0 || executing) return;
+        if ((!tableId && !tableCode) || basketCount === 0 || executing) return;
 
         setExecuting(true);
         try {
-            // Group items by ID and count quantities
-            const itemCounts = basket.reduce((acc, id) => {
-                acc[id] = (acc[id] || 0) + 1;
-                return acc;
-            }, {} as Record<string, number>);
+            const activeOrderId = localStorage.getItem('hp_active_order_id');
+            const isAppending = new URLSearchParams(window.location.search).get('append') === 'true';
 
-            const items = Object.entries(itemCounts).map(([menuItemId, quantity]) => ({
+            const items = Object.entries(basket).map(([menuItemId, quantity]) => ({
                 menuItemId,
                 quantity
             }));
 
-            const customerName = localStorage.getItem('hp_guest_name');
+            if (isAppending && activeOrderId) {
+                // APPEND MODE: Add items to existing order
+                const res = await fetch(`/api/orders/${activeOrderId}/items`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items })
+                });
 
-            const res = await fetch('/api/orders', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    tableId,
-                    tableCode,
-                    customerName,
-                    items
-                })
-            });
+                const data: ApiResponse = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed to update order');
 
-            const data: ApiResponse = await res.json();
-            if (!data.success || !data.order) throw new Error(data.error || 'Failed to place order');
+                router.push(`/order-status?id=${activeOrderId}`);
+            } else {
+                // CREATE MODE: Standard new order flow
+                const customerName = localStorage.getItem('hp_guest_name');
+                const sessionId = localStorage.getItem('hp_session_id');
 
-            // Save order ID and redirect
-            localStorage.setItem('hp_active_order_id', data.order.id);
-            router.push(`/order-status?id=${data.order.id}`);
+                const res = await fetch('/api/orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tableId,
+                        tableCode,
+                        customerName,
+                        sessionId,
+                        items
+                    })
+                });
+
+                const data: ApiResponse = await res.json();
+                if (!data.success || !data.order) throw new Error(data.error || 'Failed to place order');
+
+                localStorage.setItem('hp_active_order_id', data.order.id);
+                router.push(`/order-status?id=${data.order.id}`);
+            }
         } catch (err) {
             alert(err instanceof Error ? err.message : 'Error placing order');
             setExecuting(false);
@@ -261,13 +295,19 @@ export default function MenuPage() {
                 </div>
 
                 <div className="flex items-center gap-4">
-                    <button className="flex items-center gap-2 md:gap-3 bg-[#D43425] text-white px-4 md:px-6 py-1.5 md:py-2 rounded-full hover:bg-red-700 transition-all shadow-lg active:scale-95 group">
+                    <button
+                        onClick={() => setIsCartOpen(true)}
+                        className="flex items-center gap-2 md:gap-3 bg-[#D43425] text-white px-4 md:px-6 py-1.5 md:py-2 rounded-full hover:bg-red-700 transition-all shadow-lg active:scale-95 group relative"
+                    >
                         <svg className="w-4 h-4 md:w-5 md:h-5 group-hover:rotate-12 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"></path>
                             <line x1="3" y1="6" x2="21" y2="6"></line>
                             <path d="M16 10a4 4 0 0 1-8 0"></path>
                         </svg>
-                        <span className="font-bold text-[10px] md:text-sm uppercase tracking-widest">{basket.length}</span>
+                        <span className="font-bold text-[10px] md:text-sm uppercase tracking-widest">{basketCount}</span>
+                        {basketCount > 0 && (
+                            <div className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-full animate-ping opacity-50" />
+                        )}
                     </button>
                 </div>
             </header>
@@ -324,7 +364,7 @@ export default function MenuPage() {
                                 className="group flex flex-col gap-6 animate-ink-spread"
                                 style={{ animationDelay: `${idx * 150}ms` }}
                             >
-                                <div className="relative aspect-square overflow-hidden rounded-[1rem] shadow-xl border border-[#D43425]/10 bg-white">
+                                <div className="relative aspect-square overflow-hidden rounded-2xl shadow-xl border border-[#D43425]/10 bg-white">
                                     <Image
                                         src={item.image}
                                         alt={item.title}
@@ -332,30 +372,47 @@ export default function MenuPage() {
                                         className="object-cover transition-transform duration-700 group-hover:scale-110 saturate-[0.85] hover:saturate-100"
                                     />
                                     <div className="absolute inset-0 bg-black/5" />
-                                    <button
-                                        onClick={() => toggleBasket(item.id)}
-                                        className={`absolute bottom-4 right-4 w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 ${basket.includes(item.id) ? 'bg-[#D43425] text-white scale-110' : 'bg-white/90 backdrop-blur-sm text-black hover:bg-white hover:scale-110 active:scale-95'}`}
-                                    >
-                                        {basket.includes(item.id) ? (
-                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                                                <polyline points="20 6 9 17 4 12"></polyline>
-                                            </svg>
-                                        ) : (
-                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                                                <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
-                                            </svg>
-                                        )}
-                                    </button>
+                                    {basket[item.id] > 0 && (
+                                        <div className="absolute top-4 right-4 bg-[#D43425] text-white w-8 h-8 rounded-full flex items-center justify-center font-black text-xs shadow-lg animate-bounce border-2 border-white">
+                                            {basket[item.id]}
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="space-y-3">
-                                    <div className="flex justify-between items-baseline gap-4 border-b border-[#D43425]/10 pb-2">
-                                        <h3 className="font-playfair text-2xl font-black text-ink">{item.title}</h3>
-                                        <span className="font-playfair italic text-lg text-[#D43425] font-bold tabular-nums">{item.price}</span>
+                                    <div className="flex justify-between items-start gap-4 border-b border-[#D43425]/10 pb-2">
+                                        <div className="flex flex-col">
+                                            <h3 className="font-playfair text-xl md:text-2xl font-black text-ink">{item.title}</h3>
+                                            {alreadyOrdered[item.id] && (
+                                                <span className="text-[7px] font-black uppercase tracking-widest text-green-600 bg-green-50 px-2 py-0.5 rounded-full w-fit mt-1 border border-green-100 italic">
+                                                    Already in Kitchen ({alreadyOrdered[item.id]})
+                                                </span>
+                                            )}
+                                        </div>
+                                        <span className="font-playfair italic text-lg text-[#D43425] font-bold tabular-nums whitespace-nowrap">{item.price}</span>
                                     </div>
-                                    <p className="text-xs font-medium text-black/50 leading-relaxed italic">
+                                    <p className="text-[10px] md:text-xs font-medium text-black/50 leading-relaxed italic">
                                         {item.description}
                                     </p>
+
+                                    {/* QUANTITY CONTROLLER */}
+                                    <div className="flex items-center justify-between pt-2">
+                                        <div className="flex items-center gap-4 bg-vellum py-1 px-1 rounded-full border border-[#D43425]/10">
+                                            <button
+                                                onClick={() => updateQuantity(item.id, -1)}
+                                                className="w-10 h-10 rounded-full flex items-center justify-center bg-[#3D2329] text-white hover:bg-[#D43425] transition-colors active:scale-90"
+                                            >
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                            </button>
+                                            <span className="font-black text-sm w-4 text-center">{basket[item.id] || 0}</span>
+                                            <button
+                                                onClick={() => updateQuantity(item.id, 1)}
+                                                className="w-10 h-10 rounded-full flex items-center justify-center bg-[#D43425] text-white hover:bg-red-700 transition-colors active:scale-90 shadow-md"
+                                            >
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         ))
@@ -369,7 +426,7 @@ export default function MenuPage() {
                     className={`owl-interactive ${isOwlPeeking ? 'owl-peek-visible' : 'owl-peek-hidden'} cursor-pointer group pr-1`}
                     onMouseEnter={() => setIsOwlPeeking(true)}
                     onMouseLeave={() => isMenuRevealed && setIsOwlPeeking(false)}
-                    onClick={() => setIsOwlPeeking(!isOwlPeeking)}
+                    onClick={() => router.push('/ai-assistant')}
                 >
                     <div className="relative flex flex-col items-end">
                         <div className={`mb-4 mr-10 bg-[#3D2329] text-[#EFE7D9] px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all duration-300 whitespace-nowrap shadow-2xl border border-[#D43425]/30 ${isOwlPeeking ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-4'}`}>
@@ -392,7 +449,7 @@ export default function MenuPage() {
                             </div>
 
                             <Image
-                                src="/images/avatars/master_waiter.png"
+                                src="/images/waiter.png"
                                 alt="The Master of Ceremonies"
                                 fill
                                 priority
@@ -403,24 +460,100 @@ export default function MenuPage() {
                 </div>
             </div>
 
-            {/* Floating Action Tray */}
-            <div className={`fixed bottom-4 md:bottom-8 left-1/2 -translate-x-1/2 z-100 w-[95vw] max-w-md transition-all duration-500 transform ${basket.length > 0 ? 'translate-y-0 opacity-100' : 'translate-y-20 opacity-0 pointer-events-none'}`}>
-                <div className="bg-[#3D2329] text-[#EFE7D9] p-2 rounded-full shadow-2xl flex items-center justify-between pl-6 border border-[#D43425]/20">
+            {/* Floating Action Tray (Mobile optimized) */}
+            <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-150 w-[90vw] max-w-sm transition-all duration-500 transform ${basketCount > 0 ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 pointer-events-none'}`}>
+                <div className="bg-[#D43425] text-white p-2 rounded-2xl shadow-2xl flex items-center justify-between pl-6 border border-white/20">
                     <div className="flex flex-col">
-                        <span className="text-[9px] font-bold tracking-widest uppercase text-[#C9A227]">Selected Plates</span>
-                        <span className="font-bold text-lg">{basket.length} {basket.length === 1 ? 'Delicacy' : 'Delicacies'}</span>
+                        <span className="text-[7px] font-black tracking-widest uppercase text-white/60">Cart Value</span>
+                        <span className="font-black text-sm">₹{basketTotal.toLocaleString()}</span>
                     </div>
                     <button
                         onClick={executeOrder}
                         disabled={executing}
-                        className="bg-[#D43425] px-8 py-4 rounded-full font-black text-xs uppercase tracking-[0.3em] hover:bg-[#EFE7D9] hover:text-[#D43425] transition-all shadow-lg active:scale-95 disabled:opacity-50"
+                        className="bg-white text-[#D43425] px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-[0.2em] hover:bg-zinc-100 transition-all shadow-lg active:scale-95 disabled:opacity-50"
                     >
-                        {executing ? 'Sending...' : 'Execute Order'}
+                        {executing ? 'Sending...' : 'Confirm'}
                     </button>
                 </div>
             </div>
 
-            <div className="h-24 md:h-32" />
+            {/* CART REVIEW DRAWER (Premium Parchment) */}
+            <div className={`fixed inset-0 z-110 pointer-events-none ${isCartOpen ? 'pointer-events-auto' : ''}`}>
+                <div
+                    className={`absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-500 ${isCartOpen ? 'opacity-100' : 'opacity-0'}`}
+                    onClick={() => setIsCartOpen(false)}
+                />
+                <div className={`absolute bottom-0 left-0 right-0 max-h-[85vh] bg-vellum rounded-t-[3rem] shadow-[0_-20px_50px_rgba(0,0,0,0.4)] border-t-2 border-[#D43425]/20 overflow-hidden transform transition-transform duration-700 font-sans ${isCartOpen ? 'translate-y-0' : 'translate-y-full'}`}>
+                    {/* Drawer Handle */}
+                    <div className="w-12 h-1 bg-ink/10 rounded-full mx-auto mt-4 mb-2" />
+
+                    <div className="p-8 pb-12 overflow-y-auto max-h-[80vh] scroll-smooth">
+                        <div className="flex justify-between items-center mb-8">
+                            <div>
+                                <h2 className="text-3xl font-playfair font-black text-ink italic leading-none">The Basket</h2>
+                                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#D43425] mt-1">Review your imperial selections</p>
+                            </div>
+                            <button onClick={() => setIsCartOpen(false)} className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center text-ink hover:bg-zinc-200 transition-colors">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            </button>
+                        </div>
+
+                        <div className="space-y-6">
+                            {Object.entries(basket).map(([id, qty]) => {
+                                const item = menuItems.find(m => m.id === id);
+                                if (!item) return null;
+                                return (
+                                    <div key={id} className="flex items-center gap-6 border-b border-ink/5 pb-6">
+                                        <div className="relative w-24 h-24 rounded-2xl overflow-hidden shadow-inner border border-ink/5 shrink-0">
+                                            <Image src={item.image} alt={item.title} fill className="object-cover" />
+                                        </div>
+                                        <div className="grow">
+                                            <h4 className="font-playfair text-xl font-bold text-ink leading-tight">{item.title}</h4>
+                                            <span className="text-[#D43425] font-bold text-sm">₹{item.priceRaw.toLocaleString()}</span>
+
+                                            <div className="flex items-center gap-3 mt-3">
+                                                <button onClick={() => updateQuantity(id, -1)} className="w-8 h-8 rounded-full bg-vellum border border-ink/10 flex items-center justify-center hover:bg-ink hover:text-white transition-all">
+                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                                </button>
+                                                <span className="font-black text-sm w-4 text-center">{qty}</span>
+                                                <button onClick={() => updateQuantity(id, 1)} className="w-8 h-8 rounded-full bg-vellum border border-ink/10 flex items-center justify-center hover:bg-[#D43425] hover:text-white transition-all">
+                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        {Object.keys(basket).length === 0 && (
+                            <div className="py-20 text-center">
+                                <p className="font-playfair italic text-xl opacity-40">Your basket is currently empty.</p>
+                                <button onClick={() => setIsCartOpen(false)} className="mt-4 text-[10px] font-black uppercase tracking-widest text-[#D43425]">Select some masterpieces</button>
+                            </div>
+                        )}
+
+                        <div className="mt-12 space-y-4">
+                            <div className="flex justify-between items-baseline border-t-2 border-ink pt-6">
+                                <span className="text-[10px] font-black uppercase tracking-[0.3em] opacity-40 text-ink">Est. Ledger Value</span>
+                                <span className="text-4xl font-black text-ink tabular-nums">₹{basketTotal.toLocaleString()}</span>
+                            </div>
+                            <button
+                                onClick={executeOrder}
+                                disabled={executing || Object.keys(basket).length === 0}
+                                className="w-full py-6 bg-[#D43425] text-white rounded-4xl font-black text-xs uppercase tracking-[0.5em] hover:bg-black transition-all shadow-2xl active:scale-95 disabled:opacity-50"
+                            >
+                                {executing ? 'Updating Ledger...' : 'Seal & Send to Kitchen'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="h-32 md:h-40" />
+
+            {/* Premium Navigation Dock */}
+            <MobileNav />
         </main>
     );
 }

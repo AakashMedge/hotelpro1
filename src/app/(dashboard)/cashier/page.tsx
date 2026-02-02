@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // ============================================
 // Types
@@ -14,8 +15,8 @@ type LineItem = {
 };
 
 type PendingTable = {
-    id: string;         // Full Order ID
-    shortId: string;    // Short Display ID
+    id: string;
+    shortId: string;
     tableCode: string;
     guestName: string;
     items: LineItem[];
@@ -23,13 +24,6 @@ type PendingTable = {
     total: number;
     version: number;
 };
-
-interface ApiResponse {
-    success: boolean;
-    orders?: any[];
-    order?: any;
-    error?: string;
-}
 
 // ============================================
 // Component
@@ -45,339 +39,224 @@ export default function CashierTerminal() {
     const [isMobileDetailView, setIsMobileDetailView] = useState(false);
     const [committing, setCommitting] = useState(false);
 
-    // ============================================
-    // Fetch Data
-    // ============================================
-
     const fetchPendingOrders = useCallback(async () => {
         try {
             const res = await fetch('/api/orders?status=BILL_REQUESTED');
-            const data: ApiResponse = await res.json();
+            const data = await res.json();
+            if (!data.success) return;
 
-            if (!data.success || !data.orders) throw new Error(data.error || 'Failed to fetch orders');
-
-            const pending: PendingTable[] = data.orders.map((o: any) => ({
+            const pending = data.orders.map((o: any) => ({
                 id: o.id,
                 shortId: o.id.slice(0, 8).toUpperCase(),
-                tableCode: o.tableCode,
-                guestName: o.customerName || `GUEST @ ${o.tableCode}`,
+                tableCode: o.tableCode.replace('T-', ''),
+                guestName: o.customerName || `Guest @ ${o.tableCode}`,
                 requestedAt: new Date(o.updatedAt).getTime(),
                 version: o.version,
                 total: o.total,
                 items: o.items.map((item: any) => ({
-                    id: item.id,
-                    name: item.itemName,
-                    qty: item.quantity,
-                    price: item.price
+                    id: item.id, name: item.itemName, qty: item.quantity, price: item.price
                 }))
             }));
-
             setOrders(pending);
-
-            // Auto-select first if none selected and on desktop
-            if (pending.length > 0 && !selectedOrderId && window.innerWidth >= 768) {
+            if (pending.length > 0 && !selectedOrderId && window.innerWidth >= 1024) {
                 setSelectedOrderId(pending[0].id);
             }
-        } catch (err) {
-            console.error('[CASHIER] Fetch Error:', err);
-        } finally {
-            setLoading(false);
-        }
+        } catch (err) { console.error(err); }
+        finally { setLoading(false); }
     }, [selectedOrderId]);
 
     useEffect(() => {
         setMounted(true);
         fetchPendingOrders();
-
-        // Poll every 10 seconds
         const interval = setInterval(fetchPendingOrders, 10000);
         return () => clearInterval(interval);
     }, [fetchPendingOrders]);
 
-    // ============================================
-    // Settlement
-    // ============================================
-
     const handleSettlement = async () => {
         const order = orders.find(o => o.id === selectedOrderId);
         if (!order || !paymentMethod || committing) return;
-
         setCommitting(true);
         try {
-            const res = await fetch(`/api/orders/${order.id}/payment`, {
+            await fetch(`/api/orders/${order.id}/payment`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    method: paymentMethod,
-                    amount: order.total
-                })
+                body: JSON.stringify({ method: paymentMethod, amount: order.total })
             });
-
-            const result = await res.json();
-            if (!result.success) throw new Error(result.error || 'Payment failed');
-
-            // Refresh list
             setSelectedOrderId(null);
             setShowConfirm(false);
             setPaymentMethod(null);
             setIsMobileDetailView(false);
             await fetchPendingOrders();
-        } catch (err) {
-            alert(err instanceof Error ? err.message : 'Error processing payment');
-        } finally {
-            setCommitting(false);
-        }
-    };
-
-    const handleQuickSettle = async (e: React.MouseEvent, orderId: string, method: string) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        if (committing) return;
-
-        const order = orders.find(o => o.id === orderId);
-        if (!order) return;
-
-        setCommitting(true);
-        const previousOrders = [...orders];
-
-        // Optimistic UI: Remove from list immediately
-        setOrders(prev => prev.filter(o => o.id !== orderId));
-        if (selectedOrderId === orderId) setSelectedOrderId(null);
-
-        try {
-            const res = await fetch(`/api/orders/${orderId}/payment`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    method,
-                    amount: order.total
-                })
-            });
-
-            const result = await res.json();
-            if (!result.success) throw new Error(result.error || 'Payment failed');
-
-            // Keep the optimistic state, but maybe fetch to sync
-            await fetchPendingOrders();
-        } catch (err) {
-            console.error('[CASHIER] Quick Settle Error:', err);
-            // Rollback
-            setOrders(previousOrders);
-            alert('Fast Settlement failed. Please use detailed panel.');
-        } finally {
-            setCommitting(false);
-        }
+        } finally { setCommitting(false); }
     };
 
     if (!mounted) return null;
 
     const currentOrder = orders.find(o => o.id === selectedOrderId);
 
-    const calculateBill = (items: LineItem[]) => {
-        const subtotal = items.reduce((acc, item) => acc + (item.price * item.qty), 0);
-        const tax = subtotal * 0.18; // Logic matching UI (18%)
-        return { subtotal, tax, total: subtotal + tax };
-    };
-
-    const selectMobileTable = (id: string) => {
-        setSelectedOrderId(id);
-        setIsMobileDetailView(true);
-    };
-
     if (loading && orders.length === 0) {
         return (
-            <div className="flex items-center justify-center h-full w-full bg-[#F8F9FA]">
-                <div className="w-8 h-8 border-4 border-zinc-200 border-t-zinc-900 rounded-full animate-spin" />
+            <div className="h-full flex items-center justify-center bg-white">
+                <div className="w-8 h-8 border-2 border-zinc-100 border-t-[#111111] rounded-full animate-spin" />
             </div>
         );
     }
 
     return (
-        <div className="flex h-full w-full bg-[#F8F9FA] overflow-hidden flex-col md:flex-row relative">
+        <div className="h-full bg-white flex flex-col lg:flex-row overflow-hidden relative">
 
-            {/* READY TO PAY QUEUE */}
-            <aside className={`w-full md:w-80 lg:w-96 bg-white border-r border-zinc-200 flex flex-col shrink-0 transition-transform duration-300 ${isMobileDetailView ? '-translate-x-full md:translate-x-0' : 'translate-x-0'} absolute md:relative inset-0 md:inset-auto z-20`}>
-                <div className="h-14 border-b border-zinc-100 flex items-center px-6 bg-zinc-50/50">
-                    <span className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.3em]">Pending_Settlements</span>
+            {/* INGRESS QUEUE */}
+            <aside className={`w-full lg:w-80 border-r border-zinc-100 flex flex-col shrink-0 transition-transform duration-300 ${isMobileDetailView ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'} absolute lg:relative inset-0 lg:inset-auto z-20 bg-white`}>
+                <div className="px-6 py-6 border-b border-zinc-100 shrink-0">
+                    <h1 className="text-xl font-bold text-[#111111] tracking-tight">Settlements</h1>
+                    <p className="text-[10px] text-zinc-400 font-medium uppercase tracking-widest mt-1">{orders.length} Pending</p>
                 </div>
-                <div className="grow overflow-y-auto p-4 md:p-6 space-y-3 lg:space-y-4 hide-scrollbar pb-32">
-                    {orders.map(order => (
-                        <button
-                            key={order.id}
-                            onClick={() => {
-                                if (window.innerWidth < 768) selectMobileTable(order.id);
-                                else { setSelectedOrderId(order.id); setPaymentMethod(null); }
-                            }}
-                            className={`flex flex-col p-4 lg:p-6 rounded-2xl border-2 transition-all w-full text-left active:scale-[0.98] ${selectedOrderId === order.id ? 'bg-zinc-900 border-zinc-900 text-white shadow-xl' : 'bg-white border-zinc-100 text-zinc-900 hover:border-zinc-300'}`}
-                        >
-                            <div className="flex justify-between items-start mb-4">
-                                <span className="text-3xl lg:text-4xl font-black tracking-tighter uppercase">{order.tableCode}</span>
-                                <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase tracking-widest ${selectedOrderId === order.id ? 'bg-red-500 text-white' : 'bg-red-50 text-red-500 border border-red-100'}`}>PAID_PENDING</span>
-                            </div>
-                            <div className="flex justify-between items-end">
-                                <div className="flex flex-col">
-                                    <span className="text-[9px] font-bold opacity-40 uppercase tracking-widest leading-none mb-1">Ref</span>
-                                    <span className="text-xs font-bold truncate leading-none uppercase">{order.shortId}</span>
+                <div className="grow overflow-y-auto px-4 py-6 no-scrollbar pb-32">
+                    <div className="space-y-3">
+                        {orders.map(order => (
+                            <button
+                                key={order.id}
+                                onClick={() => {
+                                    setSelectedOrderId(order.id);
+                                    if (window.innerWidth < 1024) setIsMobileDetailView(true);
+                                }}
+                                className={`w-full p-4 rounded-xl border transition-all text-left group ${selectedOrderId === order.id ? 'bg-[#111111] border-[#111111] shadow-sm' : 'bg-white border-zinc-100 hover:border-zinc-300'}`}
+                            >
+                                <div className="flex items-center justify-between mb-3">
+                                    <span className={`text-xl font-bold tracking-tighter ${selectedOrderId === order.id ? 'text-white' : 'text-[#111111]'}`}>T-{order.tableCode}</span>
+                                    <div className={`w-1.5 h-1.5 rounded-full ${selectedOrderId === order.id ? 'bg-red-500' : 'bg-red-400'}`} />
                                 </div>
-                                <div className="text-right">
-                                    <span className="text-xl lg:text-2xl font-black tabular-nums tracking-tighter">₹{order.total.toLocaleString()}</span>
+                                <div className="flex items-end justify-between">
+                                    <span className={`text-[9px] font-bold uppercase tracking-widest ${selectedOrderId === order.id ? 'text-white/40' : 'text-zinc-300'}`}>₹{order.total.toLocaleString()}</span>
+                                    <span className={`text-[8px] font-medium uppercase tracking-widest ${selectedOrderId === order.id ? 'text-white/20' : 'text-zinc-200'}`}>{order.shortId}</span>
                                 </div>
-                            </div>
-
-                        </button>
-                    ))}
+                            </button>
+                        ))}
+                    </div>
                     {orders.length === 0 && (
-                        <div className="p-12 text-center text-zinc-300 italic text-sm border-2 border-dashed border-zinc-100 rounded-2xl w-full">
-                            All accounts cleared.
+                        <div className="py-24 text-center opacity-20">
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">All Clear</p>
                         </div>
                     )}
                 </div>
             </aside>
 
             {/* SETTLEMENT PANEL */}
-            <main className={`grow overflow-y-auto flex flex-col bg-white transition-transform duration-300 ${isMobileDetailView ? 'translate-x-0' : 'translate-x-full md:translate-x-0'} absolute md:relative inset-0 md:inset-auto z-30`}>
+            <main className={`grow flex flex-col bg-white transition-transform duration-300 ${isMobileDetailView ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} absolute lg:relative inset-0 lg:inset-auto z-30`}>
                 {currentOrder ? (
-                    <div className="flex flex-col h-full bg-white">
-                        <div className="p-4 md:p-8 lg:p-10 border-b border-zinc-100 flex justify-between items-center md:items-end bg-white sticky top-0 md:relative z-10 shadow-sm md:shadow-none">
+                    <div className="h-full flex flex-col overflow-hidden">
+                        {/* HEADER */}
+                        <div className="px-6 py-6 border-b border-zinc-100 shrink-0 flex items-center justify-between">
                             <div className="flex items-center gap-4">
-                                <button onClick={() => setIsMobileDetailView(false)} className="md:hidden w-10 h-10 rounded-xl border border-zinc-200 flex items-center justify-center text-zinc-900">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                                <button onClick={() => setIsMobileDetailView(false)} className="lg:hidden p-2 -ml-2 text-zinc-400">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"></polyline></svg>
                                 </button>
-                                <div className="space-y-0.5 md:space-y-1">
-                                    <h2 className="text-2xl md:text-5xl lg:text-7xl font-black tracking-tighter leading-none uppercase">SETTLE_{currentOrder.tableCode}</h2>
-                                    <p className="hidden md:block text-[10px] md:text-xs font-bold text-zinc-400 uppercase tracking-widest italic leading-none">ID_{currentOrder.id.slice(0, 12).toUpperCase()}</p>
+                                <div>
+                                    <h2 className="text-xl font-bold text-[#111111] tracking-tight uppercase">Table {currentOrder.tableCode}</h2>
+                                    <p className="text-[10px] text-zinc-400 font-medium uppercase tracking-widest mt-1">{currentOrder.guestName}</p>
                                 </div>
                             </div>
                             <div className="text-right">
-                                <span className="text-[8px] md:text-[10px] font-black text-zinc-300 uppercase tracking-widest leading-none block md:mb-1">Payment Requested</span>
-                                <p className="text-sm md:text-xl font-bold uppercase tabular-nums">
-                                    {new Date(currentOrder.requestedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </p>
+                                <span className="text-[9px] font-bold text-zinc-300 uppercase tracking-widest block">Ref</span>
+                                <span className="text-xs font-bold text-[#111111] tabular-nums">{currentOrder.shortId}</span>
                             </div>
                         </div>
 
-                        <div className="grow grid grid-cols-1 lg:grid-cols-2 overflow-y-auto">
-                            {/* ITEMIZATION */}
-                            <div className="p-6 md:p-8 lg:p-10 border-b lg:border-b-0 lg:border-r border-zinc-100 bg-white">
-                                <span className="text-[10px] font-black text-zinc-300 uppercase tracking-[0.4em] mb-6 md:mb-8 block">Itemized_ledger</span>
-                                <div className="space-y-5 md:space-y-6">
+                        {/* CONTENT SPLIT */}
+                        <div className="grow overflow-y-auto lg:flex no-scrollbar">
+                            {/* BILL DETAILS */}
+                            <div className="flex-1 p-6 lg:p-8 border-b lg:border-b-0 lg:border-r border-zinc-100">
+                                <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-widest block mb-6">Bill Selection</span>
+                                <div className="space-y-4">
                                     {currentOrder.items.map((item, idx) => (
-                                        <div key={idx} className="flex justify-between items-start">
-                                            <div className="flex items-start gap-4">
-                                                <div className="w-8 h-8 rounded-lg border border-zinc-100 flex items-center justify-center font-black text-xs text-zinc-400 shrink-0">{item.qty}</div>
-                                                <div className="flex flex-col">
-                                                    <span className="font-bold text-base md:text-lg text-zinc-900 leading-tight">{item.name}</span>
-                                                    <span className="text-[9px] font-bold text-zinc-300 uppercase tabular-nums tracking-widest">@ ₹{item.price.toLocaleString()}</span>
-                                                </div>
+                                        <div key={idx} className="flex items-center justify-between">
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-[10px] font-bold text-zinc-400 bg-zinc-50 px-1.5 py-0.5 rounded-md">{item.qty}</span>
+                                                <span className="text-sm font-medium text-zinc-600">{item.name}</span>
                                             </div>
-                                            <span className="text-base md:text-lg font-black tabular-nums tracking-tighter text-zinc-900">₹{(item.price * item.qty).toLocaleString()}</span>
+                                            <span className="text-sm font-bold text-[#111111] tabular-nums">₹{(item.price * item.qty).toLocaleString()}</span>
                                         </div>
                                     ))}
                                 </div>
 
-                                <div className="mt-10 md:mt-12 pt-8 border-t border-dashed border-zinc-200 space-y-2 md:space-y-3">
-                                    <div className="flex justify-between items-baseline pt-4">
-                                        <span className="text-[10px] md:text-xs font-black uppercase tracking-[0.3em] text-zinc-400">Net_Settle</span>
-                                        <span className="text-4xl md:text-5xl lg:text-6xl font-black tabular-nums tracking-tighter text-[#D43425]">₹{currentOrder.total.toLocaleString()}</span>
+                                <div className="mt-8 pt-8 border-t border-zinc-50">
+                                    <div className="flex justify-between items-baseline">
+                                        <span className="text-xs font-bold text-zinc-300 uppercase tracking-widest">Total Amount</span>
+                                        <span className="text-4xl font-bold tracking-tighter text-[#111111]">₹{currentOrder.total.toLocaleString()}</span>
                                     </div>
                                 </div>
                             </div>
 
-                            {/* SETTLEMENT ACTIONS */}
-                            <div className="p-6 md:p-8 lg:p-10 bg-zinc-50/50 flex flex-col pb-32 lg:pb-10">
-                                <span className="text-[10px] font-black text-zinc-300 uppercase tracking-[0.4em] mb-6 md:mb-8 block italic">Payment_Orchestration</span>
-
-                                <div className="grid grid-cols-1 gap-3 md:gap-4 grow">
+                            {/* PAYMENT METHODS */}
+                            <div className="flex-1 p-6 lg:p-8 bg-zinc-50/30 pb-32 lg:pb-8">
+                                <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-widest block mb-6">Method</span>
+                                <div className="space-y-3">
                                     {[
-                                        { id: 'UPI', label: 'DIGITAL_UPI', icon: 'M5 13l4 4L19 7' },
-                                        { id: 'CARD', label: 'FINANCE_CARD', icon: 'M3 10h18M7 15h1m4 0h1m4 0h1M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z' },
-                                        { id: 'CASH', label: 'PHYSICAL_CASH', icon: 'M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z' }
+                                        { id: 'UPI', label: 'UPI Digital', icon: 'M5 13l4 4L19 7' },
+                                        { id: 'CARD', label: 'Card Payment', icon: 'M3 10h18M7 15h1m4 0h1m4 0h1M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z' },
+                                        { id: 'CASH', label: 'Cash Entry', icon: 'M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z' }
                                     ].map(method => (
                                         <button
                                             key={method.id}
                                             onClick={() => setPaymentMethod(method.id as any)}
-                                            className={`flex items-center justify-between p-4 md:p-6 rounded-2xl border-2 transition-all active:scale-[0.98] ${paymentMethod === method.id ? 'bg-white border-zinc-900 shadow-xl' : 'bg-white border-zinc-200 text-zinc-400 hover:border-zinc-400'}`}
+                                            className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${paymentMethod === method.id ? 'bg-white border-[#111111] shadow-sm' : 'bg-white border-zinc-100 text-zinc-400 hover:border-zinc-200'}`}
                                         >
-                                            <div className="flex items-center gap-4 md:gap-6">
-                                                <div className={`w-10 h-10 md:w-12 md:h-12 rounded-xl flex items-center justify-center transition-all ${paymentMethod === method.id ? 'bg-zinc-900 text-white shadow-lg' : 'bg-zinc-100 text-zinc-400'}`}>
-                                                    <svg width="20" height="20" className="md:w-[24px] md:h-[24px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d={method.icon} /></svg>
+                                            <div className="flex items-center gap-4">
+                                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${paymentMethod === method.id ? 'bg-[#111111] text-white' : 'bg-zinc-50'}`}>
+                                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d={method.icon} /></svg>
                                                 </div>
-                                                <span className={`text-xs md:text-sm font-black uppercase tracking-[0.2em] md:tracking-[0.3em] ${paymentMethod === method.id ? 'text-zinc-900' : 'text-zinc-400'}`}>{method.label}</span>
+                                                <span className={`text-xs font-bold uppercase tracking-wider ${paymentMethod === method.id ? 'text-[#111111]' : 'text-zinc-400'}`}>{method.label}</span>
                                             </div>
-                                            <div className={`w-5 h-5 md:w-6 md:h-6 rounded-full border-2 flex items-center justify-center transition-all ${paymentMethod === method.id ? 'border-zinc-900 bg-zinc-900 shadow-inner' : 'border-zinc-200'}`}>
-                                                {paymentMethod === method.id && <div className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-white transition-all scale-100" />}
+                                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${paymentMethod === method.id ? 'border-[#111111]' : 'border-zinc-100'}`}>
+                                                {paymentMethod === method.id && <div className="w-1.5 h-1.5 rounded-full bg-[#111111]" />}
                                             </div>
                                         </button>
                                     ))}
                                 </div>
-
-                                <div className="mt-8 md:mt-12 fixed md:relative bottom-4 left-4 right-4 md:bottom-auto md:left-auto md:right-auto z-40">
+                                <div className="mt-8">
                                     <button
                                         disabled={!paymentMethod || committing}
                                         onClick={() => setShowConfirm(true)}
-                                        className={`w-full h-16 md:h-20 rounded-2xl md:rounded-3xl flex items-center justify-center gap-4 text-xs font-black uppercase tracking-[0.4em] transition-all shadow-xl ${paymentMethod ? 'bg-[#D43425] text-white hover:bg-black active:scale-95 shadow-[#D43425]/20' : 'bg-zinc-200 text-zinc-400 cursor-not-allowed shadow-none'}`}
+                                        className={`w-full h-14 rounded-2xl text-[10px] font-bold uppercase tracking-[0.3em] transition-all shadow-sm ${paymentMethod ? 'bg-[#111111] text-white hover:bg-zinc-800 active:scale-95' : 'bg-zinc-100 text-zinc-300 cursor-not-allowed'}`}
                                     >
-                                        {committing ? 'PROCESSING...' : paymentMethod === 'CASH' ? 'FINALIZE_CASH' : 'COMMIT_PAYMENT'}
+                                        {committing ? '...' : 'Complete Payment'}
                                     </button>
                                 </div>
                             </div>
                         </div>
                     </div>
                 ) : (
-                    <div className="h-full flex items-center justify-center p-10 md:p-20 text-center bg-white">
-                        <div className="space-y-6 max-w-sm">
-                            <div className="w-16 h-16 md:w-20 md:h-20 bg-zinc-50 rounded-full flex items-center justify-center mx-auto border border-zinc-100">
-                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#D1D1D1" strokeWidth="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"></path></svg>
-                            </div>
-                            <h3 className="text-lg md:text-xl font-black tracking-tighter uppercase text-zinc-900">Queue_Idle</h3>
-                            <p className="text-[10px] md:text-sm font-bold text-zinc-300 leading-relaxed uppercase tracking-widest">Select a table from the settlement ingress to begin orchestration.</p>
+                    <div className="h-full flex flex-col items-center justify-center p-12 text-center opacity-20">
+                        <div className="w-12 h-12 bg-zinc-50 border border-zinc-100 rounded-lg flex items-center justify-center mb-4">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#111111" strokeWidth="2.5"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                         </div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Waiting for queue Ingress</p>
                     </div>
                 )}
             </main>
 
             {/* CONFIRMATION OVERLAY */}
-            {showConfirm && currentOrder && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
-                    <div className="w-full max-w-lg bg-white rounded-[2rem] md:rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-                        <div className="p-8 md:p-10 space-y-6 md:space-y-8 text-center">
-                            <div className="w-16 h-16 md:w-20 md:h-20 bg-green-50 text-green-600 rounded-full flex items-center justify-center mx-auto border border-green-100 shadow-sm">
-                                <svg className="w-8 h-8 md:w-10 md:h-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <AnimatePresence>
+                {showConfirm && currentOrder && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-white/80 backdrop-blur-sm z-200 flex items-center justify-center p-6">
+                        <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="w-full max-w-sm bg-white rounded-2xl border border-zinc-100 shadow-xl p-8 text-center">
+                            <div className="w-12 h-12 bg-green-50 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
                             </div>
-                            <div className="space-y-2">
-                                <h4 className="text-[9px] md:text-[10px] font-black text-zinc-400 uppercase tracking-[0.4em]">Authorization_Needed</h4>
-                                <p className="text-2xl md:text-3xl font-black tracking-tighter uppercase">Authorize {currentOrder.tableCode}?</p>
-                                <div className="inline-flex items-center gap-2 bg-zinc-50 px-3 py-1.5 rounded-full border border-zinc-100">
-                                    <span className="text-[8px] md:text-[10px] font-black text-zinc-900 uppercase tracking-widest">{paymentMethod}</span>
-                                    <div className="w-1 h-1 bg-zinc-300 rounded-full" />
-                                    <span className="text-[10px] md:text-xs font-black text-[#D43425] tabular-nums">₹{currentOrder.total.toLocaleString()}</span>
-                                </div>
+                            <h3 className="text-xl font-bold text-[#111111] tracking-tight mb-2">Authorize Table {currentOrder.tableCode}?</h3>
+                            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-8">{paymentMethod} &bull; ₹{currentOrder.total.toLocaleString()}</p>
+                            <div className="grid grid-cols-2 gap-3">
+                                <button onClick={() => setShowConfirm(false)} className="h-12 rounded-xl border border-zinc-100 text-[10px] font-bold uppercase tracking-widest text-[#111111]">Cancel</button>
+                                <button onClick={handleSettlement} className="h-12 rounded-xl bg-[#111111] text-white text-[10px] font-bold uppercase tracking-widest">Confirm</button>
                             </div>
-
-                            <div className="grid grid-cols-2 gap-3 md:gap-4 pt-4">
-                                <button
-                                    onClick={() => setShowConfirm(false)}
-                                    className="h-14 md:h-16 rounded-xl border-2 border-zinc-100 text-zinc-900 text-[10px] md:text-xs font-black uppercase tracking-widest active:scale-95 transition-all"
-                                >
-                                    CANCEL
-                                </button>
-                                <button
-                                    onClick={handleSettlement}
-                                    disabled={committing}
-                                    className="h-14 md:h-16 rounded-xl bg-black text-white text-[10px] md:text-xs font-black uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-black/10 disabled:opacity-50"
-                                >
-                                    {committing ? '...' : 'CONFIRM'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <style jsx global>{`
-                .hide-scrollbar::-webkit-scrollbar { display: none; }
-                .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+                .no-scrollbar::-webkit-scrollbar { display: none; }
+                .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
             `}</style>
         </div>
     );

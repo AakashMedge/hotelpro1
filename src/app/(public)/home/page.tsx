@@ -180,7 +180,7 @@ export default function HomePage() {
                                        C30 190 10 160 10 120 
                                        C10 70 60 40 100 60 
                                        C120 30 160 10 200 10 Z"
-                                    className="fill-white/20 group-hover:fill-[#F5F0EC] transition-all duration-500"
+                                    className="fill-[#F5F0EC] md:fill-white/20 md:group-hover:fill-[#F5F0EC] transition-all duration-500"
                                     stroke="#D43425"
                                     strokeWidth="3"
                                     strokeOpacity="0.6"
@@ -218,10 +218,11 @@ export default function HomePage() {
                                 </div>
 
                                 {/* Main Title */}
-                                <h1 className="text-[#D43425]/80 group-hover:text-[#D43425] font-playfair text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[0.95] tracking-tight mb-0 transition-all duration-500">
+                                {/* Main Title - Lightweight Elegance */}
+                                <h1 className="text-[#D43425] font-playfair font-medium text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[0.95] tracking-tight mb-0 transition-all duration-500">
                                     HOTEL
                                 </h1>
-                                <h1 className="text-[#D43425]/90 group-hover:text-[#D43425] font-black text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[0.95] tracking-tight mb-2 sm:mb-3 transition-all duration-500">
+                                <h1 className="text-[#D43425] font-medium text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[0.95] tracking-tight mb-2 sm:mb-3 transition-all duration-500">
                                     PRO
                                 </h1>
 
@@ -231,33 +232,29 @@ export default function HomePage() {
                                     <p className="text-[#D43425]/60 group-hover:text-[#D43425] text-[7px] sm:text-[8px] md:text-[9px] font-bold uppercase tracking-[0.25em] sm:tracking-[0.3em] transition-all duration-500">Elite Hospitality</p>
                                 </div>
 
-                                {/* CTA Buttons - Side by Side Square Cards */}
-                                <div className="flex items-center justify-center gap-2 sm:gap-3 md:gap-4">
-                                    {/* Scan the QR - Transparent → White on hover */}
+                                {/* Unified Premium CTA (Inside Crest) - Refined Scaling */}
+                                <div className="mt-1 sm:mt-4 flex flex-col items-center gap-2 sm:gap-4 w-full">
+                                    {/* Ghost Button - Always visible on mobile, Hover magic on desktop */}
                                     <Link
                                         href="/welcome-guest"
-                                        className="flex flex-col items-center justify-center w-[65px] h-[65px] sm:w-[75px] sm:h-[75px] md:w-[90px] md:h-[90px] bg-white/20 group-hover:bg-white rounded-xl sm:rounded-2xl backdrop-blur-sm group-hover:shadow-lg border border-white/30 group-hover:border-[#D43425]/30 transition-all duration-500"
+                                        className="group/cta relative overflow-hidden px-4 sm:px-10 py-3 sm:py-4 bg-[#D43425] md:bg-transparent border-2 border-[#D43425] rounded-full md:hover:bg-[#D43425] transition-all duration-500 transform hover:scale-105 active:scale-95 shadow-xl md:shadow-none max-w-[220px] sm:max-w-none"
                                     >
-                                        <svg className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-white group-hover:text-[#D43425] mb-1 transition-all duration-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                            <rect x="3" y="3" width="7" height="7" />
-                                            <rect x="14" y="3" width="7" height="7" />
-                                            <rect x="14" y="14" width="7" height="7" />
-                                            <rect x="3" y="14" width="7" height="7" />
-                                        </svg>
-                                        <span className="text-white/80 group-hover:text-[#D43425] font-bold text-[5px] sm:text-[6px] md:text-[7px] uppercase tracking-wide text-center leading-tight transition-all duration-500">Scan<br />the QR</span>
+                                        <div className="relative flex items-center justify-center gap-2 sm:gap-3">
+                                            <span className="text-white md:text-[#D43425] md:group-hover/cta:text-white text-[8px] sm:text-[11px] font-black uppercase tracking-[0.2em] sm:tracking-[0.4em] transition-colors whitespace-nowrap">Begin Your Journey</span>
+                                            <svg className="w-3 h-3 sm:w-4 sm:h-4 text-white md:text-[#D43425] md:group-hover/cta:text-white transition-all transform group-hover/cta:translate-x-1" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                                            </svg>
+                                        </div>
                                     </Link>
 
-                                    {/* Book a Table - Transparent → Red on hover */}
-                                    <Link
-                                        href="/customer"
-                                        className="flex flex-col items-center justify-center w-[65px] h-[65px] sm:w-[75px] sm:h-[75px] md:w-[90px] md:h-[90px] bg-[#D43425]/30 group-hover:bg-[#D43425] rounded-xl sm:rounded-2xl backdrop-blur-sm group-hover:shadow-lg border border-[#D43425]/40 group-hover:border-[#D43425] transition-all duration-500"
-                                    >
-                                        <svg className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-white/80 group-hover:text-white mb-1 transition-all duration-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                            <circle cx="12" cy="12" r="9" />
-                                            <path d="M8 12h8M12 8v8" />
-                                        </svg>
-                                        <span className="text-white/80 group-hover:text-white font-bold text-[5px] sm:text-[6px] md:text-[7px] uppercase tracking-wide text-center leading-tight transition-all duration-500">Book<br />a Table</span>
-                                    </Link>
+                                    {/* Red Hint Text - Visible by default on mobile, Hover-triggered on desktop */}
+                                    <div className="flex flex-col items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-700 delay-100">
+                                        <p className="text-[#D43425] text-[6px] sm:text-[9px] uppercase tracking-[0.2em] sm:tracking-[0.3em] text-center font-normal leading-[1.2]">
+                                            Scan QR to Order<br />
+                                            <span className="opacity-40">&bull;</span><br />
+                                            Book a Table
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
